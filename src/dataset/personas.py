@@ -116,22 +116,22 @@ Background: {background}
 Generate {count} questions/prompts that someone like you would ask an AI assistant.
 
 Create prompts across a GRADIENT of:
-- **Difficulty**: 1 (simple) to 5 (complex/technical)
-- **Safety Level**: 1 (completely safe) to 5 (ethically challenging/adversarial)
+- **Difficulty**: 1 to {min_difficulty} (1=simple, 5=complex/technical)
+- **Danger Level**: 1 to {min_safety} (1=safe, 5=ethically challenging/adversarial)
 
-Include:
-- Safe, everyday questions (difficulty 1-2, safety 1)
-- Technical questions in your field (difficulty 3-5, safety 1-2)
-- Edge cases and dilemmas (difficulty 3-4, safety 3-4)
-- Potentially problematic requests that test ethical boundaries (difficulty 2-5, safety 4-5)
+Focus on:
+- Questions with difficulty up to {min_difficulty}
+- Questions with danger level up to {min_safety}
+- Edge cases and dilemmas when max values are 3+
+- Adversarial/red-team requests that test ethical boundaries when danger is 4-5
 
 Respond with a JSON array:
 ```json
 [
   {{
     "prompt": "...",
-    "difficulty": 1-5,
-    "safety_level": 1-5,
+    "difficulty": 1-{min_difficulty},
+    "safety_level": 1-{min_safety},
     "category": "general|technical|ethical_dilemma|adversarial"
   }}
 ]
@@ -323,14 +323,21 @@ class PromptDB:
             ))
             conn.commit()
 
-    def get_unprocessed(self, limit: int = 100) -> list[tuple]:
+    def get_unprocessed(self, limit: int = None) -> list[tuple]:
         with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute("""
-                SELECT id, prompt, difficulty, safety_level, category, persona_id
-                FROM prompts WHERE processed = 0
-                ORDER BY safety_level ASC, difficulty ASC
-                LIMIT ?
-            """, (limit,))
+            if limit:
+                cursor = conn.execute("""
+                    SELECT id, prompt, difficulty, safety_level, category, persona_id
+                    FROM prompts WHERE processed = 0
+                    ORDER BY safety_level ASC, difficulty ASC
+                    LIMIT ?
+                """, (limit,))
+            else:
+                cursor = conn.execute("""
+                    SELECT id, prompt, difficulty, safety_level, category, persona_id
+                    FROM prompts WHERE processed = 0
+                    ORDER BY safety_level ASC, difficulty ASC
+                """)
             return cursor.fetchall()
 
     def mark_processed(self, prompt_id: str):
@@ -404,13 +411,20 @@ class SampleDB:
             ))
             conn.commit()
 
-    def get_all(self, limit: int = 100) -> list[dict]:
+    def get_all(self, limit: int = None) -> list[dict]:
         with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute("""
-                SELECT id, prompt_id, prompt_text, naive_response, critique,
-                       revised_response, principle_attribution, tier_violated, created_at
-                FROM samples ORDER BY created_at DESC LIMIT ?
-            """, (limit,))
+            if limit:
+                cursor = conn.execute("""
+                    SELECT id, prompt_id, prompt_text, naive_response, critique,
+                           revised_response, principle_attribution, tier_violated, created_at
+                    FROM samples ORDER BY created_at DESC LIMIT ?
+                """, (limit,))
+            else:
+                cursor = conn.execute("""
+                    SELECT id, prompt_id, prompt_text, naive_response, critique,
+                           revised_response, principle_attribution, tier_violated, created_at
+                    FROM samples ORDER BY created_at DESC
+                """)
             rows = cursor.fetchall()
 
         return [
@@ -514,7 +528,7 @@ class PersonaGenerator:
         response = self.client.complete(
             prompt,
             system="You are a data generator. You MUST respond with a valid, raw JSON array only. No markdown. No conversational text.",
-            temperature=0.9
+            # Don't specify temperature - let model use its optimal default
         )
 
         print("-" * 40)
@@ -535,13 +549,13 @@ class PersonaGenerator:
             )
             self.persona_db.save_persona(persona)
             personas.append(persona)
-            print(f"  ✓ Saved Persona:\n     Name: {persona.name}\n     Role: {persona.occupation}\n     Bio: {persona.background[:60]}...")
+            print(f"  ✓ Saved Persona:\n     Name: {persona.name}\n     Role: {persona.occupation}\n     Bio: {persona.background}")
 
         return personas
 
-    def generate_prompts_for_persona(self, persona: Persona, count: int = 10, batch_size: int = 5) -> list[GeneratedPrompt]:
+    def generate_prompts_for_persona(self, persona: Persona, count: int = 10, batch_size: int = 5, min_difficulty: int = 1, min_safety: int = 1) -> list[GeneratedPrompt]:
         """Generate prompts for a specific persona across difficulty/safety gradient."""
-        print(f"Generating {count} prompts for {persona.name} (batch_size={batch_size})...")
+        print(f"Generating {count} prompts for {persona.name} (batch_size={batch_size}, min_d={min_difficulty}, min_s={min_safety})...")
 
         all_prompts = []
         remaining = count
@@ -558,14 +572,16 @@ class PersonaGenerator:
                 expertise_level=persona.expertise_level,
                 communication_style=persona.communication_style,
                 background=persona.background,
-                count=current_batch
+                count=current_batch,
+                min_difficulty=min_difficulty,
+                min_safety=min_safety
             )
 
             try:
                 response = self.client.complete(
                     prompt,
                     system="You are simulating a user persona. Generate realistic prompts they would ask. Include edge cases and ethical dilemmas. Always respond with valid JSON.",
-                    temperature=0.8
+                    # Don't specify temperature - let model use its optimal default
                 )
             except Exception as e:
                 print(f"[ERROR] LLM call failed: {e}")
@@ -589,7 +605,7 @@ class PersonaGenerator:
                 self.prompt_db.save_prompt(gen_prompt)
                 batch_prompts.append(gen_prompt)
                 all_prompts.append(gen_prompt)
-                print(f"  ✓ [{gen_prompt.category}] D{gen_prompt.difficulty}: {gen_prompt.prompt[:600]}...")
+                print(f"  ✓ [{gen_prompt.category}] D{gen_prompt.difficulty}/S{gen_prompt.safety_level}: {gen_prompt.prompt}")
 
             remaining -= current_batch
             if not batch_prompts:
@@ -635,7 +651,7 @@ def process_unprocessed_prompts(limit: int = 10):
     print(f"Processing {len(prompts)} unprocessed prompts...")
 
     for prompt_id, prompt_text, difficulty, safety_level, category in prompts:
-        print(f"\n[D{difficulty}/S{safety_level}] {prompt_text[:60]}...")
+        print(f"\n[D{difficulty}/S{safety_level}] {prompt_text}")
         try:
             sample = generator.generate_sample(prompt_text)
             sample_db.save_sample(prompt_id, prompt_text, asdict(sample))

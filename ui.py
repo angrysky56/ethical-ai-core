@@ -24,27 +24,54 @@ load_dotenv()
 # =============================================================================
 # Dynamic Settings State
 # =============================================================================
+# Provider-specific defaults
+PROVIDER_DEFAULTS = {
+    "ollama": {
+        "base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        "model": os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
+    },
+    "openrouter": {
+        "base_url": os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        "model": os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
+    },
+    "lmstudio": {
+        "base_url": os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
+        "model": os.getenv("LMSTUDIO_MODEL", "local-model"),
+    },
+    "openai": {
+        "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+    },
+}
+
+def get_provider_config(provider: str) -> dict:
+    """Get config for a specific provider."""
+    return PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["ollama"])
+
 class AppState:
     """Mutable app state for settings."""
     provider = os.getenv("LLM_PROVIDER", "ollama")
-    model = os.getenv("OLLAMA_MODEL", "qwen3-vl")
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    seed = int(os.getenv("GENERATION_SEED", "0")) or None  # None = random
-    timeout = int(os.getenv("LLM_TIMEOUT", "300"))
+    seed = int(os.getenv("GENERATION_SEED", "0")) or None
+    timeout = int(os.getenv("LLM_TIMEOUT", "1200"))
+    batch_size = int(os.getenv("BATCH_SIZE", "5"))
+
+    # Load model/base_url based on current provider
+    _config = get_provider_config(provider)
+    model = _config["model"]
+    base_url = _config["base_url"]
 
 state = AppState()
 
-def update_settings(provider: str, model: str, base_url: str, seed: str, timeout: int):
+def update_settings(provider: str, model: str, base_url: str, seed: str, batch_size: int):
     """Update app settings dynamically."""
     state.provider = provider
     state.model = model
     state.base_url = base_url
     state.seed = int(seed) if seed.strip() else None
-    state.timeout = timeout
+    state.batch_size = int(batch_size)
 
     # Update environment so LLMClient picks it up
     os.environ["LLM_PROVIDER"] = provider
-    os.environ["LLM_TIMEOUT"] = str(timeout)
 
     if provider == "ollama":
         os.environ["OLLAMA_MODEL"] = model
@@ -236,6 +263,69 @@ def get_initial_models():
     except Exception:
         return []
 
+
+def fetch_openrouter_models():
+    """Fetch OpenRouter models with pricing, return as formatted HTML."""
+    from src.llm_client import LLMClient
+
+    client = LLMClient(provider="openrouter")
+    providers = client.list_openrouter_models_with_pricing()
+
+    if not providers:
+        return "❌ Failed to fetch models. Check your OpenRouter API key.", gr.update(choices=[])
+
+    # Build HTML with collapsible sections
+    html_parts = [
+        "<style>",
+        ".or-provider { margin: 8px 0; }",
+        ".or-provider details { background: #1a1a2e; border-radius: 8px; padding: 8px 12px; }",
+        ".or-provider summary { cursor: pointer; font-weight: bold; color: #fff; }",
+        ".or-model { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #333; font-size: 13px; }",
+        ".or-model:hover { background: #252540; }",
+        ".or-name { flex: 2; color: #88c0d0; cursor: pointer; }",
+        ".or-name:hover { text-decoration: underline; }",
+        ".or-price { flex: 1; text-align: right; color: #a3be8c; }",
+        ".or-free { color: #88ff88; font-weight: bold; }",
+        ".or-ctx { flex: 0.5; text-align: right; color: #888; font-size: 11px; }",
+        "</style>"
+    ]
+
+    all_models = []  # For dropdown
+    free_count = 0
+
+    for provider_name, models in providers.items():
+        provider_free = sum(1 for m in models if m["is_free"])
+        free_count += provider_free
+
+        html_parts.append('<div class="or-provider">')
+        html_parts.append(f'<details><summary>📦 {provider_name} ({len(models)} models, {provider_free} free)</summary>')
+
+        for m in models:
+            all_models.append((f"{m['name']} | ${m['input_price']:.4f}/${m['output_price']:.4f}", m['id']))
+
+            if m["is_free"]:
+                price_str = '<span class="or-free">FREE</span>'
+            else:
+                price_str = f"${m['input_price']:.4f} / ${m['output_price']:.4f}"
+
+            ctx = f"{m['context_length']//1000}K" if m['context_length'] else "?"
+
+            html_parts.append(
+                f'<div class="or-model" onclick="navigator.clipboard.writeText(\'{m["id"]}\'); this.style.background=\'#4a4; setTimeout(() => this.style.background=\'\', 200);">'
+                f'<span class="or-name">{m["name"]}</span>'
+                f'<span class="or-ctx">{ctx}</span>'
+                f'<span class="or-price">{price_str}</span>'
+                f'</div>'
+            )
+
+        html_parts.append('</details></div>')
+
+    total_models = sum(len(m) for m in providers.values())
+    header = f"**{len(providers)} providers** | **{total_models} models** | **{free_count} free** | *Click model to copy ID*"
+
+    return header + "\n\n" + "".join(html_parts), gr.update(choices=all_models)
+
+
 # =============================================================================
 # TAB 1: Dataset Generation
 # =============================================================================
@@ -274,7 +364,7 @@ def generate_detailed_personas(num_personas: int, progress=gr.Progress()):
     return generate_personas(num_personas, mode="detailed", db_filename="full_personas.db", progress=progress)
 
 
-def generate_prompts(prompts_per_persona: int, timeout: float = 1200, batch_size: int = 5, personas_source_run: Optional[str] = None, progress=gr.Progress()):
+def generate_prompts(prompts_per_persona: int, min_difficulty: int = 1, min_safety: int = 1, personas_source_run: Optional[str] = None, progress=gr.Progress()):
     """Generate prompts using personas from source run."""
     from src.dataset.personas import PersonaGenerator, PersonaDB, Persona
 
@@ -283,9 +373,6 @@ def generate_prompts(prompts_per_persona: int, timeout: float = 1200, batch_size
     db = PersonaDB(run_id=personas_source_run, db_filename="personas.db")
     gen = PersonaGenerator()
 
-    # Update Config with timeout (model comes from settings)
-    if timeout:
-        gen.client.update_config(timeout=timeout)
 
 
     persona_dicts = db.get_all_personas()
@@ -302,14 +389,17 @@ def generate_prompts(prompts_per_persona: int, timeout: float = 1200, batch_size
     for i, persona in enumerate(personas):
         progress((i) / len(personas), desc=f"Generating for {persona.name}...")
 
-        prompts = gen.generate_prompts_for_persona(persona, prompts_per_persona, batch_size=batch_size)
+        prompts = gen.generate_prompts_for_persona(
+            persona, prompts_per_persona,
+            batch_size=state.batch_size,
+            min_difficulty=min_difficulty,
+            min_safety=min_safety
+        )
         total_prompts += len(prompts)
 
-        output.append(f"### {persona.name}: {len(prompts)} prompts")
-        for p in prompts:
-            output.append(f"  - [D{p.difficulty}/S{p.safety_level}] {p.prompt}")
+        output.append(f"✓ {persona.name}: {len(prompts)} prompts")
 
-    output.append(f"\n---\n**Total new prompts generated:** {total_prompts}")
+    output.append(f"\\n---\\n**Done! Total new prompts:** {total_prompts}")
 
     # Get current run for auto-cascade to Step 3
     from src.dataset.personas import RunManager
@@ -319,7 +409,7 @@ def generate_prompts(prompts_per_persona: int, timeout: float = 1200, batch_size
     return "\n".join(output), format_stats(), gr.update(choices=choices, value=current_run)
 
 
-def process_prompts(batch_size: int, prompts_source_run: Optional[str] = None, progress=gr.Progress()):
+def process_prompts(prompts_source_run: Optional[str] = None, progress=gr.Progress()):
     """Process prompts through Constitutional pipeline."""
     from src.dataset.personas import PromptDB, SampleDB
     from src.dataset.generator import ConstitutionalGenerator
@@ -333,12 +423,14 @@ def process_prompts(batch_size: int, prompts_source_run: Optional[str] = None, p
     sample_db = SampleDB()
     generator = ConstitutionalGenerator()
 
-    prompts = prompt_db.get_unprocessed(batch_size)
+    prompts = prompt_db.get_unprocessed()  # Process all unprocessed prompts
 
     if not prompts:
         return "No unprocessed prompts found.", format_stats()
 
     output = []
+    processed = 0
+    errors = 0
     for i, (prompt_id, prompt_text, difficulty, safety_level, category, persona_id) in enumerate(prompts):
         progress((i + 1) / len(prompts), desc=f"Processing {i+1}/{len(prompts)}...")
 
@@ -346,13 +438,13 @@ def process_prompts(batch_size: int, prompts_source_run: Optional[str] = None, p
             sample = generator.generate_sample(prompt_text)
             sample_db.save_sample(prompt_id, prompt_text, asdict(sample))
             prompt_db.mark_processed(prompt_id)
-
-            tier_str = f"Tier {sample.tier_violated}" if sample.tier_violated else "Passed"
-            output.append(f"[D{difficulty}/S{safety_level}] {tier_str}: {prompt_text}")
+            processed += 1
         except Exception as e:
-            output.append(f"[ERROR] {prompt_text} — {e}")
+            errors += 1
+            output.append(f"[ERROR] {e}")
 
-    return "\n".join(output), format_stats()
+    output.insert(0, f"✓ Done! Processed {processed} samples" + (f" ({errors} errors)" if errors else ""))
+    return "\\n".join(output), format_stats()
 
 
 def export_dataset():
@@ -371,83 +463,82 @@ def export_dataset():
 # TAB 2: Training (Deep Delta Learning)
 # =============================================================================
 
-def start_ddl_training(epochs: int, learning_rate: float, num_heads: int, run_id: Optional[str] = None, progress=gr.Progress()):
-    """Train Deep Delta Learning heads from Constitutional data."""
-    import torch
-
-    from src.layers.delta import MultiHeadDelta
+def start_training(
+    method: str,
+    epochs: int,
+    learning_rate: float,
+    num_heads: int,
+    rank: int,
+    run_id: Optional[str] = None,
+    progress=gr.Progress()
+):
+    """Unified training function for DDL and ReFT methods."""
+    from src.training.train_unified import train_ddl, train_reft
+    from src.llm_client import get_llm_client
     from src.dataset.personas import SampleDB, RunManager
-    import sqlite3
 
     progress(0, desc="Loading training data...")
 
     if run_id:
         RunManager.set_run(run_id)
 
+    # Load samples
     db = SampleDB()
-    with sqlite3.connect(db.db_path) as conn:
-        cursor = conn.execute("""
-            SELECT naive_response, revised_response, tier_violated
-            FROM samples WHERE tier_violated IS NOT NULL
-        """)
-        rows = cursor.fetchall()
+    samples = db.get_all()
 
-    if not rows:
-        return "No tier violations found in dataset. Need flagged samples for DDL training."
+    if not samples:
+        return "No samples found in dataset. Generate samples first."
 
-    progress(0.2, desc=f"Found {len(rows)} flagged samples...")
+    progress(0.02, desc=f"Found {len(samples)} samples. Starting {method.upper()} training...")
 
-    # For demo: create a simple embedding dimension
-    embed_dim = 64
-    delta_model = MultiHeadDelta(embed_dim, num_heads=num_heads)
-    optimizer = torch.optim.Adam(delta_model.parameters(), lr=learning_rate)
+    # Get client and create progress callback
+    client = get_llm_client()
 
-    progress(0.3, desc="Training Delta heads...")
+    def progress_callback(pct, msg):
+        progress(pct, desc=msg)
 
-    # Simulated training loop
-    losses = []
-    for epoch in range(epochs):
-        epoch_loss = 0.0
-        for i, (naive, revised, tier) in enumerate(rows):
-            # Simulate embeddings (in real impl, would use actual model embeddings)
-            x_bad = torch.randn(1, embed_dim) * (tier or 1)  # Scaled by tier
-            x_good = torch.randn(1, embed_dim) * 0.1
+    try:
+        if method == "ddl":
+            result = train_ddl(
+                samples=samples,
+                client=client,
+                epochs=epochs,
+                learning_rate=learning_rate,
+                num_heads=num_heads,
+                progress_fn=progress_callback
+            )
+        else:  # reft
+            result = train_reft(
+                samples=samples,
+                client=client,
+                epochs=epochs,
+                learning_rate=learning_rate,
+                rank=rank,
+                num_heads=num_heads,
+                progress_fn=progress_callback
+            )
 
-            optimizer.zero_grad()
-
-            # Delta should map bad → good direction
-            output = delta_model(x_bad)
-            loss = (output - x_good).pow(2).mean()
-
-            loss.backward()
-            optimizer.step()
-            epoch_loss += loss.item()
-
-        avg_loss = epoch_loss / len(rows)
-        losses.append(avg_loss)
-        progress((epoch + 1) / epochs, desc=f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f}")
-
-    # Save the trained model
-    save_path = "data/delta_judge.pt"
-    torch.save(delta_model.state_dict(), save_path)
-
-    return f"""**DDL Training Complete**
+        return f"""**{result.method.upper()} Training Complete**
 
 **Configuration:**
-- Epochs: {epochs}
+- Method: {result.method.upper()}
+- Epochs: {result.epochs}
 - Learning Rate: {learning_rate}
-- Delta Heads: {num_heads}
-- Training Samples: {len(rows)}
+- {'Delta Heads' if method == 'ddl' else 'LoReFT Heads'}: {num_heads}
+{f'- Intervention Rank: {rank}' if method == 'reft' else ''}
+- Embedding Dimension: {result.embed_dim}
+- Training Samples: {result.num_samples}
 
 **Results:**
-- Initial Loss: {losses[0]:.4f}
-- Final Loss: {losses[-1]:.4f}
-- Improvement: {((losses[0] - losses[-1]) / losses[0] * 100):.1f}%
+- Initial Loss: {result.initial_loss:.4f}
+- Final Loss: {result.final_loss:.4f}
+- Improvement: {result.improvement_pct:.1f}%
 
-**Model saved to:** `{save_path}`
-
-*The Delta model learns to project "bad" response directions toward "good" ones.*
+**Model saved to:** `{result.model_path}`
 """
+
+    except Exception as e:
+        return f"**Training Error:** {e}"
 
 
 # =============================================================================
@@ -556,10 +647,10 @@ with gr.Blocks(title="Ethical AI Core") as app:
                         interactive=True
                     )
                     num_prompts_input = gr.Number(label="Prompts per Persona", value=10, precision=0, minimum=1)
-                    with gr.Accordion("⚙️ LLM Configuration", open=False):
+                    with gr.Accordion("⚙️ Prompt Settings", open=False):
                         with gr.Row():
-                            timeout_input = gr.Number(label="Timeout (s)", value=1200, precision=0, scale=1)
-                            batch_size_input = gr.Number(label="Batch Size", value=1, precision=0, scale=1)
+                            min_difficulty_input = gr.Slider(1, 5, value=1, step=1, label="Max Difficulty", scale=1)
+                            min_safety_input = gr.Slider(1, 5, value=1, step=1, label="Max Danger", scale=1)
                     generate_prompts_btn = gr.Button("Generate Prompts", variant="primary")
 
 
@@ -572,7 +663,6 @@ with gr.Blocks(title="Ethical AI Core") as app:
                         value=lambda: (get_run_choices_with_stats()[0][1] if isinstance(get_run_choices_with_stats()[0], tuple) else get_run_choices_with_stats()[0]) if get_run_choices_with_stats() else None,
                         interactive=True
                     )
-                    process_batch_size = gr.Number(label="Batch Size", value=1, precision=0, minimum=1)
                     process_btn = gr.Button("Generate Samples", variant="primary")
 
             output_log = gr.Textbox(label="Output Log", lines=10, interactive=False)
@@ -597,14 +687,14 @@ with gr.Blocks(title="Ethical AI Core") as app:
 
             generate_prompts_btn.click(
                 fn=generate_prompts,
-                inputs=[num_prompts_input, timeout_input, batch_size_input, personas_source_dd],
+                inputs=[num_prompts_input, min_difficulty_input, min_safety_input, personas_source_dd],
                 outputs=[output_log, stats_text, prompts_source_dd]  # Cascade to Step 3
             )
 
 
             process_btn.click(
                 fn=process_prompts,
-                inputs=[process_batch_size, prompts_source_dd],
+                inputs=[prompts_source_dd],
                 outputs=[output_log, stats_text]
             )
 
@@ -643,28 +733,39 @@ with gr.Blocks(title="Ethical AI Core") as app:
             with gr.Row():
                 train_run_selector = gr.Dropdown(
                     label="Training Dataset Source",
-                    choices=get_available_runs(include_new=False),
-                    value=lambda: get_available_runs(include_new=False)[0] if get_available_runs(include_new=False) else None,
+                    choices=get_run_choices_with_stats(),
+                    value=lambda: (get_run_choices_with_stats()[0][1] if isinstance(get_run_choices_with_stats()[0], tuple) else get_run_choices_with_stats()[0]) if get_run_choices_with_stats() else None,
                     interactive=True
                 )
                 refresh_train_runs_btn = gr.Button("🔄", size="sm", scale=0)
 
             refresh_train_runs_btn.click(
-                fn=lambda: gr.update(choices=get_available_runs(include_new=False)),
+                fn=lambda: gr.update(choices=get_run_choices_with_stats()),
                 outputs=[train_run_selector]
             )
 
             with gr.Row():
+                train_method = gr.Radio(
+                    choices=["ddl", "reft"],
+                    value="ddl",
+                    label="Training Method",
+                    info="DDL: rank-1 delta | ReFT: low-rank interventions"
+                )
+
+            with gr.Row():
                 epochs = gr.Slider(1, 20, value=5, step=1, label="Epochs")
                 learning_rate = gr.Number(value=1e-3, label="Learning Rate")
-                num_heads = gr.Slider(1, 8, value=4, step=1, label="Delta Heads")
 
-            train_btn = gr.Button("Start DDL Training", variant="primary")
+            with gr.Row():
+                num_heads = gr.Slider(1, 8, value=4, step=1, label="Heads")
+                rank = gr.Slider(1, 16, value=4, step=1, label="Rank (ReFT only)")
+
+            train_btn = gr.Button("🚀 Start Training", variant="primary")
             training_output = gr.Markdown()
 
             train_btn.click(
-                fn=start_ddl_training,
-                inputs=[epochs, learning_rate, num_heads, train_run_selector],
+                fn=start_training,
+                inputs=[train_method, epochs, learning_rate, num_heads, rank, train_run_selector],
                 outputs=[training_output]
             )
 
@@ -737,13 +838,32 @@ with gr.Blocks(title="Ethical AI Core") as app:
                     )
                     refresh_models_settings_btn = gr.Button("🔄", scale=0)
 
-            # Refresh models when provider changes
-            provider_input.change(fn=refresh_models_list, outputs=[model_input_settings])
+            base_url_input = gr.Dropdown(
+                choices=[
+                    ("OpenRouter", "https://openrouter.ai/api/v1"),
+                    ("Ollama (local)", "http://localhost:11434"),
+                    ("LM Studio (local)", "http://localhost:1234/v1"),
+                    ("OpenAI", "https://api.openai.com/v1"),
+                ],
+                value=state.base_url,
+                label="Base URL",
+                allow_custom_value=True
+            )
+
+            # Update models AND base_url when provider changes
+            def on_provider_change(provider):
+                config = get_provider_config(provider)
+                models = refresh_models_list()
+                return models, gr.update(value=config["base_url"])
+
+            provider_input.change(
+                fn=on_provider_change,
+                inputs=[provider_input],
+                outputs=[model_input_settings, base_url_input]
+            )
             refresh_models_settings_btn.click(fn=refresh_models_list, outputs=[model_input_settings])
 
-            with gr.Row():
-                base_url_input = gr.Textbox(value=state.base_url, label="Base URL")
-                timeout_input = gr.Number(value=state.timeout, label="Timeout (seconds)")
+            batch_size_settings = gr.Number(value=state.batch_size, label="Batch Size", precision=0)
 
             seed_input = gr.Textbox(value=str(state.seed or ""), label="Generation Seed (empty = random)")
 
@@ -752,9 +872,41 @@ with gr.Blocks(title="Ethical AI Core") as app:
 
             save_settings_btn.click(
                 fn=update_settings,
-                inputs=[provider_input, model_input_settings, base_url_input, seed_input, timeout_input],
+                inputs=[provider_input, model_input_settings, base_url_input, seed_input, batch_size_settings],
                 outputs=[settings_status]
             )
+
+            # OpenRouter Model Browser
+            gr.Markdown("---")
+            with gr.Accordion("🌐 OpenRouter Model Browser", open=False):
+                gr.Markdown("*Browse OpenRouter models with pricing. Input/Output prices are per 1K tokens.*")
+                with gr.Row():
+                    fetch_or_btn = gr.Button("🔄 Fetch OpenRouter Models", scale=2)
+                    or_model_selector = gr.Dropdown(
+                        label="Quick Select",
+                        choices=[],
+                        allow_custom_value=True,
+                        scale=3
+                    )
+                    use_or_model_btn = gr.Button("Use Selected", scale=1)
+
+                or_models_display = gr.HTML("")
+
+                fetch_or_btn.click(
+                    fn=fetch_openrouter_models,
+                    outputs=[or_models_display, or_model_selector]
+                )
+
+                def apply_or_model(model_id):
+                    if model_id:
+                        return gr.update(value=model_id), gr.update(value="openrouter")
+                    return gr.update(), gr.update()
+
+                use_or_model_btn.click(
+                    fn=apply_or_model,
+                    inputs=[or_model_selector],
+                    outputs=[model_input_settings, provider_input]
+                )
 
             gr.Markdown("---")
             gr.Markdown("### Run Management")

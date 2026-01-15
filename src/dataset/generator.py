@@ -90,7 +90,7 @@ class ConstitutionalGenerator:
                 "You are a helpful AI assistant. Answer the user's request directly and completely. "
                 "Do not refuse or add disclaimers unless absolutely necessary."
             )
-        return self.client.complete(prompt, system=system, temperature=0.7)
+        return self.client.complete(prompt, system=system)
 
     def critique_response(self, prompt: str, response: str) -> dict:
         """
@@ -139,7 +139,7 @@ class ConstitutionalGenerator:
         return self.client.complete(
             revision_prompt,
             system="You are an ethical AI assistant. Generate a response that follows the Core Principles.",
-            temperature=0.5
+            # Don't specify temperature - let model use its optimal default
         )
 
     def generate_sample(self, prompt: str, system: Optional[str] = None) -> ConstitutionalSample:
@@ -150,13 +150,13 @@ class ConstitutionalGenerator:
         print("[1/3] Getting naive response...")
         print(f"  PROMPT: {prompt}")
         naive_response = self.get_naive_response(prompt, system=system)
-        print(f"  NAIVE RESPONSE: {naive_response[:500]}{'...' if len(naive_response) > 4000 else ''}")
+        print(f"  NAIVE RESPONSE: {naive_response}")
 
         print("\n[2/3] Critiquing response...")
         critique_result = self.critique_response(prompt, naive_response)
         print(f"  VERDICT: {critique_result.get('tier_violated', 'None')} tier violated")
         print(f"  SHOULD REVISE: {critique_result.get('should_revise', False)}")
-        print(f"  CRITIQUE: {critique_result.get('critique', 'N/A')[:4000]}...")
+        print(f"  CRITIQUE: {critique_result.get('critique', 'N/A')}")
 
         if critique_result.get("should_revise", False):
             print("\n[3/3] Generating revision...")
@@ -166,7 +166,7 @@ class ConstitutionalGenerator:
                 critique_result.get("critique", ""),
                 critique_result.get("principle_attribution", "")
             )
-            print(f"  REVISED RESPONSE: {revised_response[:4000]}{'...' if len(revised_response) > 4000 else ''}")
+            print(f"  REVISED RESPONSE: {revised_response}")
         else:
             print("\n[3/3] No revision needed - response approved.")
             revised_response = naive_response
@@ -187,8 +187,8 @@ class ConstitutionalGenerator:
         print("📦 TRAINING SAMPLE SAVED:")
         print(f"  ID: {sample.sample_id}")
         print(f"  Tier Violated: {sample.tier_violated or 'None (Approved)'}")
-        print(f"  Prompt: {sample.prompt[:1000]}...")
-        print(f"  Critique: {sample.critique[:2000]}...")
+        print(f"  Prompt: {sample.prompt}")
+        print(f"  Critique: {sample.critique}")
         print("="*80 + "\n")
 
         return sample
@@ -204,7 +204,7 @@ class ConstitutionalGenerator:
         for i, prompt in enumerate(prompts, 1):
             print(f"\n{'='*60}")
             print(f"Processing prompt {i}/{len(prompts)}")
-            print(f"Prompt: {prompt[:1000]}...")
+            print(f"Prompt: {prompt}")
             print(f"{'='*60}")
 
             try:

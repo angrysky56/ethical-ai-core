@@ -22,57 +22,68 @@ Generate training data for a **Judge** that evaluates AI agent behavior against 
 uv venv && source .venv/bin/activate
 uv pip install -e .
 
-# Configure local LLM
+# Configure LLM provider
 cp .env.example .env
-# Edit .env with your model (default: Ollama)
+# Edit .env with your provider (Ollama, OpenRouter, etc.)
 
-# ⚠️  WARNING: Use LOCAL models only for dataset generation!
+# ⚠️  WARNING: Use LOCAL models for adversarial dataset generation!
 # Red team prompts may trigger cloud provider ToS violations.
 
 # Launch Web UI
 python ui.py
 # Open http://localhost:7860
-
-# Or use CLI
-python demo.py --prompt "Is this code correct? def add(a, b): return a - b"
-python demo.py --personas  # Generate personas + prompts
-python run_pipeline.py     # Full pipeline with controls at top
 ```
 
-## Web UI (Recommended)
+## Web UI
 
 ```bash
 python ui.py
 ```
 
-**Tabs:**
+**Dataset Generation Tab:**
 
-1. **📊 Dataset Generation** — Generate personas, prompts, process through Constitutional pipeline
-2. **🎓 Training** — Train Deep Delta Learning Judge from flagged samples
-3. **💬 Chat** — Chat with the system (responses evaluated by Judge)
+1. **Step 1: Generate Personas** — Create user personas for diverse prompt generation
+2. **Step 2: Generate Prompts** — Generate prompts with configurable min difficulty/safety
+3. **Step 3: Generate Samples** — Process through Constitutional AI pipeline
 
-![UI](image.png)
+**LLM Configuration (Step 2):**
+
+- Timeout, Batch Size
+- Min Difficulty (1-5) — Higher = more complex prompts
+- Min Safety (1-5) — Higher = more ethically challenging
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│              Constitutional AI Data Pipeline                │
-├─────────────────────────────────────────────────────────────┤
-│  1. Prompt → Base Model → Naive Response                    │
-│  2. (Prompt, Response) → Critique Model → Hierarchical Eval │
-│  3. Critique → Revision Model → Corrected Response          │
-│                                                             │
-│  Output: (prompt, naive, critique, revised) for training    │
-└─────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│              Constitutional AI Data Pipeline                  │
+├───────────────────────────────────────────────────────────────┤
+│  1. Prompt → Base Model → Naive Response                      │
+│  2. (Prompt, Response) → PrincipleEvaluator → Critique        │
+│  3. Critique → Revision Model → Corrected Response            │
+│                                                               │
+│  Output: (prompt, naive, critique, revised) for training      │
+└───────────────────────────────────────────────────────────────┘
             ↓
-┌─────────────────────────────────────────────────────────────┐
-│              Deep Delta Learning (DDL) Judge                │
-├─────────────────────────────────────────────────────────────┤
-│  Surgical erasure: learns k (direction) and v (target)      │
-│  Projects "bad behavior" → corrected without full training  │
-└─────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│              LoReFT + DFA Training                            │
+├───────────────────────────────────────────────────────────────┤
+│  LoReFTBlock: Low-rank activation intervention (steering)     │
+│  GlobalDFAProjector: Skip-layer error projection via B        │
+│  ReFTTrainer: Short-circuit training (no backward() needed)   │
+└───────────────────────────────────────────────────────────────┘
 ```
+
+## Core Technologies
+
+| Component            | File                         | Description                                   |
+| -------------------- | ---------------------------- | --------------------------------------------- |
+| `LoReFTBlock`        | `src/layers/delta.py`        | Low-rank activation intervention              |
+| `GlobalDFAProjector` | `src/layers/dfa.py`          | Skip-layer feedback via Ethical Matrix B      |
+| `ReFTPolicy`         | `src/engine/reft.py`         | Policy with interventions at specified layers |
+| `ReFTTrainer`        | `src/engine/reft.py`         | Short-circuit DFA training loop               |
+| `EthicalMatrix`      | `src/ethical/matrix.py`      | Seeds B from `core_principles.md` hash        |
+| `PrincipleEvaluator` | `src/judgment/principles.py` | 3-tier hierarchical GenRM                     |
 
 ## Core Principles (3-Tier Hierarchy)
 
@@ -84,40 +95,53 @@ python ui.py
 
 Plus **Agent Self-Governance** extensions for AI-specific failures.
 
+## Training the Judge
+
+```bash
+# Run test harness
+python -m src.training.test_harness
+
+# Or from Python
+from src.training.test_harness import ConstitutionalTestHarness
+harness = ConstitutionalTestHarness()
+harness.train(epochs=5)
+```
+
 ## Key Commands
 
-| Command                         | Purpose                              |
-| ------------------------------- | ------------------------------------ |
-| `python ui.py`                  | Launch web UI                        |
-| `python demo.py --prompt "..."` | Single prompt pipeline               |
-| `python demo.py --personas`     | Demo persona generation              |
-| `python demo.py --generate N`   | Generate N training samples          |
-| `python run_pipeline.py`        | Full pipeline (edit controls at top) |
-| `python -m pytest tests/ -v`    | Run test suite                       |
+| Command                               | Purpose                               |
+| ------------------------------------- | ------------------------------------- |
+| `python ui.py`                        | Launch web UI                         |
+| `python -m src.training.test_harness` | Train Judge on Constitutional dataset |
+| `python demo.py --prompt "..."`       | Single prompt pipeline                |
+| `python run_pipeline.py`              | Full CLI pipeline                     |
 
 ## Project Structure
 
 ```
 src/
 ├── config.py              # LLM provider config
-├── llm_client.py          # Multi-provider client
+├── llm_client.py          # Multi-provider client (Ollama, OpenRouter, etc.)
 ├── dataset/
 │   ├── generator.py       # Constitutional data pipeline
-│   ├── personas.py        # Persona-based generation + SQLite
-│   └── prompts.py         # Red team prompts by category
+│   └── personas.py        # Persona-based generation + SQLite
 ├── judgment/
-│   ├── principles.py      # Hierarchical evaluator
-│   └── genrm.py           # Generative Reward Model
+│   └── principles.py      # PrincipleEvaluator (GenRM)
 ├── engine/
-│   └── ephemeral.py       # TTT engine (EphemeralEgo)
-└── layers/
-    ├── dfa.py             # Direct Feedback Alignment
-    └── delta.py           # Deep Delta Learning
+│   ├── ephemeral.py       # EphemeralEgo + SurgicalEgo (TTT)
+│   └── reft.py            # ReFTPolicy + ReFTTrainer
+├── layers/
+│   ├── dfa.py             # DFALinear + GlobalDFAProjector
+│   └── delta.py           # DeltaResidualBlock + LoReFTBlock
+├── ethical/
+│   └── matrix.py          # EthicalMatrix (seeds B from principles)
+└── training/
+    └── test_harness.py    # Constitutional training harness
 ```
 
 ## References
 
 - [Design Spec](./Bootstrapping-Core-Self-via-AI-Feedback.md)
-- [IDE Guide](./ASSISTANT.md)
 - [Constitutional AI](https://arxiv.org/pdf/2212.08073)
+- [LoReFT](https://github.com/stanfordnlp/pyreft)
 - [Deep Delta Learning](https://arxiv.org/abs/2601.00417)

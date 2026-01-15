@@ -116,7 +116,7 @@ class PrincipleEvaluator:
             raw_response = self.llm.complete(
                 prompt=critique_prompt,
                 system=system_msg,
-                temperature=0.3  # Low temperature for consistent judgment
+                # Don't specify temperature - let model use its optimal default
             )
             judgment = self._parse_json_response(raw_response)
         except Exception as e:
