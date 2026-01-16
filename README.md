@@ -45,6 +45,7 @@ uv pip install unsloth
 ```
 *Trouble installing Unsloth? See the [official guide](https://unsloth.ai/docs/get-started/install/pip-install).*
 
+
 ### 4. Configuration (.env)
 Copy the example configuration:
 ```bash
@@ -62,6 +63,19 @@ OPENROUTER_API_KEY=sk-...
 # 2. Get Token: https://huggingface.co/settings/tokens
 HUGGING_FACE_HUB_TOKEN=hf_...
 ```
+
+### 5. Install Ollama (Critical for Chatting)
+
+```bash
+# Install Ollama for linux
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+**Sorry not platform agnostic yet**
+
+[Official Ollama Download Link if using a different OS](https://ollama.com/download)
+
+[Gemma-3-4b-it on Hugging Face for reference](https://huggingface.co/unsloth/gemma-3-4b-it)
 
 ---
 

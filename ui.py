@@ -806,10 +806,6 @@ def get_chat_response(message: str, history: list, system_prompt: str = "You are
 # BUILD THE UI
 # =============================================================================
 
-# =============================================================================
-# BUILD THE UI
-# =============================================================================
-
 # Initialize Active Run (Prevent empty run proliferation)
 existing_runs = RunManager.list_runs()
 if existing_runs and not RunManager._current_run_id:
