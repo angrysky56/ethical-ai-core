@@ -131,6 +131,17 @@ To create a custom alignment (e.g., "Pirate AI"):
 2. Edit `principles.md` to value "Rum and Loot".
 3. Select "pirate" in the UI.
 
+Training Tab: Added an "Output Adapter Name" field. You can now specify a custom folder name (e.g., experiment_v2, gemma-strict).
+
+This will save to data/trained_models/{your_name}.
+
+It currently overwrites if the folder exists (as per standard Unsloth behavior for new runs), effectively satisfying the "Select new / Overwrite" requirement.
+
+Registration: Updated the "Register to Ollama" section.
+
+You can now select which adapter to register from a dropdown list of your trained models.
+
+You can also specify the Ollama Model Tag (e.g., gemma-ethical:v2).
 ---
 
 ## 🔬 Experimental Features

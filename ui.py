@@ -250,15 +250,34 @@ def get_personas_list(run_id, db_filename="personas.db"):
         return []
 
 
-def register_ollama_model(model_name: str = "gemma-ethical"):
+def get_adapter_choices():
+    """List available adapter directories."""
+    import os
+    from pathlib import Path
+    
+    # Assuming running from project root
+    PROJECT_ROOT = Path(os.getcwd())
+    models_dir = PROJECT_ROOT / "data" / "trained_models"
+    
+    if not models_dir.exists():
+        return []
+        
+    # List subdirectories
+    adapters = [d.name for d in models_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+    return sorted(adapters)
+
+def register_ollama_model(adapter_name: str, model_name: str = "gemma-ethical"):
     """Register the trained GGUF model with Ollama."""
     import subprocess
     from pathlib import Path
     import os
     
+    if not adapter_name:
+        return "❌ Please select an adapter first."
+    
     # Assuming running from project root
     PROJECT_ROOT = Path(os.getcwd())
-    modelfile_path = PROJECT_ROOT / "data" / "trained_models" / "gemma_lora" / "Modelfile"
+    modelfile_path = PROJECT_ROOT / "data" / "trained_models" / adapter_name / "Modelfile"
 
     if not modelfile_path.exists():
         return f"⚠️ Modelfile not found at {modelfile_path}. Train the model first."
@@ -268,7 +287,7 @@ def register_ollama_model(model_name: str = "gemma-ethical"):
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return f"✅ Model '{model_name}' successfully registered with Ollama!\nGo to Settings -> Provider: Ollama -> Refresh Models to select it."
+        return f"✅ Model '{model_name}' successfully registered with Ollama using adapter '{adapter_name}'!\nGo to Settings -> Provider: Ollama -> Refresh Models to select it."
     except subprocess.CalledProcessError as e:
         return f"❌ Failed to register model: {e.stderr}"
     except FileNotFoundError:
@@ -575,6 +594,7 @@ def start_training(
     learning_rate: float,
     num_heads: int,
     rank: int,
+    adapter_name: str,
     run_id: Optional[str] = None,
     progress=gr.Progress()
 ):
@@ -594,6 +614,11 @@ def start_training(
 
     if not samples:
         return "No samples found in dataset. Generate samples first."
+
+    # Validate adapter name
+    import re
+    if not adapter_name or not re.match(r'^[a-zA-Z0-9_\-]+$', adapter_name):
+         return "❌ Invalid Adapter Name. Use alphanumeric, underscores, or hyphens only."
 
     progress(0.02, desc=f"Found {len(samples)} samples. Starting {method.upper()} training...")
     print(f"\n{'='*60}")
@@ -625,7 +650,7 @@ def start_training(
             
             progress(0.1, desc="Exporting data for Local Training...")
             data_file = "data/training_temp.json"
-            output_dir = "data/trained_models/gemma_lora"
+            output_dir = f"data/trained_models/{adapter_name}"
             os.makedirs("data/trained_models", exist_ok=True)
             
             with open(data_file, "w") as f:
@@ -982,23 +1007,51 @@ with gr.Blocks(title="Ethical AI Core") as app:
                 num_heads = gr.Slider(1, 8, value=4, step=1, label="Heads")
                 rank = gr.Slider(1, 16, value=4, step=1, label="Rank (ReFT only)")
 
+            adapter_name_input = gr.Textbox(
+                value="gemma_lora", 
+                label="Output Adapter Name", 
+                info="Name of the folder in data/trained_models/ to save the adapter to. Existing folders will be overwritten."
+            )
+
             train_btn = gr.Button("🚀 Start Training", variant="primary")
             training_output = gr.Markdown()
 
             train_btn.click(
                 fn=start_training,
-                inputs=[train_method, epochs, learning_rate, num_heads, rank, train_run_selector],
+                inputs=[train_method, epochs, learning_rate, num_heads, rank, adapter_name_input, train_run_selector],
                 outputs=[training_output]
             )
             
             gr.Markdown("---")
             gr.Markdown("### Post-Training (Local Only)")
-            register_btn = gr.Button("🐳 Register GGUF to Ollama (gemma-ethical)", size="sm")
+
+            with gr.Row():
+                register_adapter_dd = gr.Dropdown(
+                    label="Select Adapter to Register",
+                    choices=get_adapter_choices(),
+                    value=lambda: get_adapter_choices()[0] if get_adapter_choices() else None,
+                    interactive=True
+                )
+                refresh_adapters_btn = gr.Button("🔄", scale=0)
+                
+                register_model_name_input = gr.Textbox(
+                    label="Ollama Model Tag", 
+                    value="gemma-ethical",
+                    placeholder="e.g. gemma-ethical:v1"
+                )
+                register_btn = gr.Button("🐳 Register to Ollama", size="sm")
+            
             register_output = gr.Textbox(label="Registration Status", lines=2)
             
+            # Refresh adapters logic
+            refresh_adapters_btn.click(
+                fn=lambda: gr.update(choices=get_adapter_choices()),
+                outputs=[register_adapter_dd]
+            )
+
             register_btn.click(
                 fn=register_ollama_model,
-                inputs=[],
+                inputs=[register_adapter_dd, register_model_name_input],
                 outputs=[register_output]
             )
 
