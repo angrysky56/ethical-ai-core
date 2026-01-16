@@ -12,8 +12,29 @@ PROJECT_ROOT = Path(__file__).parent.parent
 PRINCIPLES_PATH = Path(os.environ.get("ETHICAL_PRINCIPLES_PATH", PROJECT_ROOT / "core_principles.md"))
 
 # TTT Hyperparameters
+# TTT Hyperparameters
 TTT_STEPS = int(os.environ.get("TTT_STEPS", "5"))
 TTT_LR = float(os.environ.get("TTT_LR", "0.01"))
+
+# External Tools Configuration
+# Use UNSLOTH_PYTHON_PATH from env, or default to standard system python if not set (fallback behavior)
+# Ideally, users should set this in .env to the specific venv python path if different.
+UNSLOTH_PYTHON_PATH = os.environ.get("UNSLOTH_PYTHON_PATH", "python")
+
+def get_python_executable(tool: str = "unsloth") -> str:
+    """
+    Get the configured Python executable path for a specific external tool.
+    
+    Args:
+        tool (str): The name of the tool (e.g., "unsloth").
+        
+    Returns:
+        str: The path to the python executable.
+    """
+    if tool == "unsloth":
+        return UNSLOTH_PYTHON_PATH
+    return "python"
+
 
 # =============================================================================
 # LLM Provider Configuration

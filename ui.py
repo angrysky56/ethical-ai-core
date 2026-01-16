@@ -635,14 +635,14 @@ def start_training(
             progress(0.2, desc="Spawning Unsloth Training (Check Terminal)...")
             
             # Load Unsloth python path from environment
-            # from src.config import get_env_variable  <-- Removing this invalid import
+            # Load Unsloth python path from environment
+            from src.config import get_python_executable
             
-            # Try getting from config or fall back to local dev path (but warn)
-            unsloth_python = os.environ.get("UNSLOTH_PYTHON_PATH")
-            if not unsloth_python:
-                # Fallback for dev environment if not in .env
-                unsloth_python = "/home/ty/Repositories/unsloth/unsloth_env/bin/python"
-                print(f"WARN: UNSLOTH_PYTHON_PATH not set in .env, using default: {unsloth_python}")
+            unsloth_python = get_python_executable("unsloth")
+            
+            if unsloth_python == "python":
+                 # Warn if falling back to default system python, as venv is usually required for unsloth
+                 print(f"WARN: UNSLOTH_PYTHON_PATH not set in .env, using default: {unsloth_python}")
 
             cmd = [
                 unsloth_python,
