@@ -2,11 +2,13 @@
 LLM Client - Unified interface for multiple LLM providers.
 Supports: OpenRouter, Ollama, LM Studio, OpenAI
 """
-import json
-import os
-import httpx
+
 from typing import Optional
-from src.config import get_llm_config, LLM_PROVIDER
+
+import httpx
+
+from src.config import LLM_PROVIDER, get_llm_config
+
 
 class LLMClient:
     """
@@ -25,7 +27,7 @@ class LLMClient:
             headers["Authorization"] = f"Bearer {self.config['api_key']}"
         # OpenRouter requires additional headers
         if self.provider == "openrouter":
-            headers["HTTP-Referer"] = "https://github.com/ethical-ai-core"
+            headers["HTTP-Referer"] = "https://github.com/angrysky56/ethical-ai-core"
             headers["X-Title"] = "Ethical AI Core"
         return headers
 
@@ -47,12 +49,14 @@ class LLMClient:
                     return [m["name"] for m in models]
             else:
                 # OpenAI compatible
-                resp = httpx.get(f"{base}/models", headers=self._get_headers(), timeout=5.0)
+                resp = httpx.get(
+                    f"{base}/models", headers=self._get_headers(), timeout=5.0
+                )
                 if resp.status_code == 200:
                     data = resp.json().get("data", [])
                     return [m["id"] for m in data]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ERROR] Failed to list models: {e}")
         return []
 
     def list_openrouter_models_with_pricing(self) -> dict:
@@ -78,7 +82,7 @@ class LLMClient:
             resp = httpx.get(
                 "https://openrouter.ai/api/v1/models",
                 headers=self._get_headers(),
-                timeout=15.0
+                timeout=15.0,
             )
             if resp.status_code != 200:
                 return {}
@@ -105,8 +109,9 @@ class LLMClient:
                     "context_length": model.get("context_length", 0),
                     "input_price": input_price_per_token * 1000,  # per 1K tokens
                     "output_price": output_price_per_token * 1000,
-                    "is_free": input_price_per_token == 0 and output_price_per_token == 0,
-                    "description": model.get("description", "")[:100]
+                    "is_free": input_price_per_token == 0
+                    and output_price_per_token == 0,
+                    "description": model.get("description", "")[:100],
                 }
 
                 if provider not in providers:
@@ -115,7 +120,9 @@ class LLMClient:
 
             # Sort providers alphabetically, put free models first within each
             for provider in providers:
-                providers[provider].sort(key=lambda m: (not m["is_free"], m["input_price"]))
+                providers[provider].sort(
+                    key=lambda m: (not m["is_free"], m["input_price"])
+                )
 
             return dict(sorted(providers.items()))
 
@@ -128,7 +135,9 @@ class LLMClient:
         if model:
             self.config["model"] = model
 
-    def _format_request(self, messages: list[dict], temperature: Optional[float] = None) -> dict:
+    def _format_request(
+        self, messages: list[dict], temperature: Optional[float] = None
+    ) -> dict:
         """
         Format request body for the specific provider.
 
@@ -164,7 +173,9 @@ class LLMClient:
         if self.provider == "ollama":
             return response.get("message", {}).get("content", "")
         else:
-            return response.get("choices", [{}])[0].get("message", {}).get("content", "")
+            return (
+                response.get("choices", [{}])[0].get("message", {}).get("content", "")
+            )
 
     def chat(self, messages: list[dict], temperature: Optional[float] = None) -> str:
         """
@@ -186,7 +197,9 @@ class LLMClient:
             response.raise_for_status()
             return self._parse_response(response.json())
 
-    def complete(self, prompt: str, system: str = "", temperature: Optional[float] = None) -> str:
+    def complete(
+        self, prompt: str, system: str = "", temperature: Optional[float] = None
+    ) -> str:
         """
         Convenience method for single-turn completion.
         Temperature is optional - if None, uses provider/model defaults.
@@ -246,11 +259,13 @@ class LLMClient:
 # Singleton for easy import
 _client: Optional[LLMClient] = None
 
+
 def get_llm_client() -> LLMClient:
     global _client
     if _client is None:
         _client = LLMClient()
     return _client
+
 
 def reset_llm_client():
     """Reset the LLM client singleton. Call when provider changes."""

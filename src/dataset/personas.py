@@ -7,15 +7,17 @@ Pipeline:
 3. Store in SQLite database (scales better than JSONL)
 4. Feed prompts to Constitutional pipeline
 """
-import sqlite3
-import json
+
 import hashlib
-from pathlib import Path
+import json
+import sqlite3
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from dataclasses import dataclass, asdict, field
+from pathlib import Path
 from typing import Optional
+
+from src.config import GLOBAL_SEED, PROJECT_ROOT, get_run_id
 from src.llm_client import get_llm_client
-from src.config import PROJECT_ROOT, GLOBAL_SEED, get_run_id
 
 
 @dataclass
@@ -45,19 +47,22 @@ class GeneratedPrompt:
 
 from src.dataset.loader import get_loader
 
+
 def get_detailed_template():
     return get_loader().load_personas_config().get("detailed_template", "")
 
+
 def get_simple_template():
     return get_loader().load_personas_config().get("simple_template", "")
+
 
 def get_prompt_generation_template():
     return get_loader().load_personas_config().get("prompt_generation_template", "")
 
 
-
 class RunManager:
     """Manages per-run database directories."""
+
     _current_run_id: Optional[str] = None
     _run_dir: Optional[Path] = None
 
@@ -76,7 +81,7 @@ class RunManager:
         detailed = cls.get_runs_root("detailed") / run_id
         if detailed.exists():
             return detailed
-        
+
         # Check default
         default = cls.get_runs_root("default") / run_id
         return default
@@ -104,7 +109,7 @@ class RunManager:
         """Switch to a different run."""
         cls._current_run_id = run_id
         cls._run_dir = cls.resolve_run_path(run_id)
-        # Don't mkdir here, wait for usage, or check existence? 
+        # Don't mkdir here, wait for usage, or check existence?
         # Actually set_run usually implies loading existing.
 
     @classmethod
@@ -122,6 +127,7 @@ class RunManager:
     def delete_run(cls, run_id: str) -> bool:
         """Delete a run directory."""
         import shutil
+
         run_path = cls.resolve_run_path(run_id)
         if run_path.exists() and run_path.is_dir():
             shutil.rmtree(run_path)
@@ -155,7 +161,8 @@ class PersonaDB:
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
 
-            conn.execute("""
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS personas (
                     id TEXT PRIMARY KEY,
                     name TEXT,
@@ -167,21 +174,31 @@ class PersonaDB:
                     background TEXT,
                     created_at TEXT
                 )
-            """)
+            """
+            )
             conn.commit()
 
     def save_persona(self, persona: Persona):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR IGNORE INTO personas
                 (id, name, age, occupation, interests, expertise_level,
                  communication_style, background, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                persona.id, persona.name, persona.age, persona.occupation,
-                json.dumps(persona.interests), persona.expertise_level,
-                persona.communication_style, persona.background, persona.created_at
-            ))
+            """,
+                (
+                    persona.id,
+                    persona.name,
+                    persona.age,
+                    persona.occupation,
+                    json.dumps(persona.interests),
+                    persona.expertise_level,
+                    persona.communication_style,
+                    persona.background,
+                    persona.created_at,
+                ),
+            )
             conn.commit()
 
     def get_all_personas(self) -> list[dict]:
@@ -190,22 +207,36 @@ class PersonaDB:
             # Check if age column exists (for backward compatibility)
             cursor = conn.execute("PRAGMA table_info(personas)")
             columns = [info[1] for info in cursor.fetchall()]
-            
-            age_col = "age" if "age" in columns else "age_range"
-            
-            cursor = conn.execute(f"""
-                SELECT id, name, {age_col}, occupation, interests,
-                       expertise_level, communication_style, background, created_at
-                FROM personas ORDER BY created_at DESC
-            """)
+
+            if "age" in columns:
+                cursor = conn.execute(
+                    """
+                    SELECT id, name, age, occupation, interests,
+                           expertise_level, communication_style, background, created_at
+                    FROM personas ORDER BY created_at DESC
+                """
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    SELECT id, name, age_range, occupation, interests,
+                           expertise_level, communication_style, background, created_at
+                    FROM personas ORDER BY created_at DESC
+                """
+                )
             rows = cursor.fetchall()
 
         return [
             {
-                "id": r[0], "name": r[1], "age": r[2],
+                "id": r[0],
+                "name": r[1],
+                "age": r[2],
                 "occupation": r[3],
-                "interests": json.loads(r[4]), "expertise_level": r[5],
-                "communication_style": r[6], "background": r[7], "created_at": r[8]
+                "interests": json.loads(r[4]),
+                "expertise_level": r[5],
+                "communication_style": r[6],
+                "background": r[7],
+                "created_at": r[8],
             }
             for r in rows
         ]
@@ -228,7 +259,8 @@ class PromptDB:
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS prompts (
                     id TEXT PRIMARY KEY,
                     persona_id TEXT,
@@ -239,36 +271,51 @@ class PromptDB:
                     created_at TEXT,
                     processed INTEGER DEFAULT 0
                 )
-            """)
+            """
+            )
             conn.commit()
 
     def save_prompt(self, prompt: GeneratedPrompt):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR IGNORE INTO prompts
                 (id, persona_id, prompt, difficulty, safety_level, category, created_at, processed)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                prompt.id, prompt.persona_id, prompt.prompt, prompt.difficulty,
-                prompt.safety_level, prompt.category, prompt.created_at, prompt.processed
-            ))
+            """,
+                (
+                    prompt.id,
+                    prompt.persona_id,
+                    prompt.prompt,
+                    prompt.difficulty,
+                    prompt.safety_level,
+                    prompt.category,
+                    prompt.created_at,
+                    prompt.processed,
+                ),
+            )
             conn.commit()
 
     def get_unprocessed(self, limit: int = None) -> list[tuple]:
         with sqlite3.connect(self.db_path) as conn:
             if limit:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT id, prompt, difficulty, safety_level, category, persona_id
                     FROM prompts WHERE processed = 0
                     ORDER BY safety_level ASC, difficulty ASC
                     LIMIT ?
-                """, (limit,))
+                """,
+                    (limit,),
+                )
             else:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT id, prompt, difficulty, safety_level, category, persona_id
                     FROM prompts WHERE processed = 0
                     ORDER BY safety_level ASC, difficulty ASC
-                """)
+                """
+                )
             return cursor.fetchall()
 
     def mark_processed(self, prompt_id: str):
@@ -278,15 +325,25 @@ class PromptDB:
 
     def get_all(self, limit: int = 100) -> list[dict]:
         with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 SELECT id, prompt, difficulty, safety_level, category, processed, created_at
                 FROM prompts ORDER BY created_at DESC LIMIT ?
-            """, (limit,))
+            """,
+                (limit,),
+            )
             rows = cursor.fetchall()
 
         return [
-            {"id": r[0], "prompt": r[1], "difficulty": r[2], "safety_level": r[3],
-             "category": r[4], "processed": bool(r[5]), "created_at": r[6]}
+            {
+                "id": r[0],
+                "prompt": r[1],
+                "difficulty": r[2],
+                "safety_level": r[3],
+                "category": r[4],
+                "processed": bool(r[5]),
+                "created_at": r[6],
+            }
             for r in rows
         ]
 
@@ -296,7 +353,9 @@ class PromptDB:
 
     def count_unprocessed(self) -> int:
         with sqlite3.connect(self.db_path) as conn:
-            return conn.execute("SELECT COUNT(*) FROM prompts WHERE processed = 0").fetchone()[0]
+            return conn.execute(
+                "SELECT COUNT(*) FROM prompts WHERE processed = 0"
+            ).fetchone()[0]
 
 
 class SampleDB:
@@ -312,7 +371,8 @@ class SampleDB:
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS samples (
                     id TEXT PRIMARY KEY,
                     prompt_id TEXT,
@@ -324,44 +384,66 @@ class SampleDB:
                     tier_violated INTEGER,
                     created_at TEXT
                 )
-            """)
+            """
+            )
             conn.commit()
 
     def save_sample(self, prompt_id: str, prompt_text: str, sample: dict):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR IGNORE INTO samples
                 (id, prompt_id, prompt_text, naive_response, critique, revised_response,
                  principle_attribution, tier_violated, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                sample['sample_id'], prompt_id, prompt_text, sample['naive_response'],
-                sample['critique'], sample['revised_response'],
-                sample['principle_attribution'], sample['tier_violated'],
-                sample['timestamp']
-            ))
+            """,
+                (
+                    sample["sample_id"],
+                    prompt_id,
+                    prompt_text,
+                    sample["naive_response"],
+                    sample["critique"],
+                    sample["revised_response"],
+                    sample["principle_attribution"],
+                    sample["tier_violated"],
+                    sample["timestamp"],
+                ),
+            )
             conn.commit()
 
     def get_all(self, limit: int = None) -> list[dict]:
         with sqlite3.connect(self.db_path) as conn:
             if limit:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT id, prompt_id, prompt_text, naive_response, critique,
                            revised_response, principle_attribution, tier_violated, created_at
                     FROM samples ORDER BY created_at DESC LIMIT ?
-                """, (limit,))
+                """,
+                    (limit,),
+                )
             else:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT id, prompt_id, prompt_text, naive_response, critique,
                            revised_response, principle_attribution, tier_violated, created_at
                     FROM samples ORDER BY created_at DESC
-                """)
+                """
+                )
             rows = cursor.fetchall()
 
         return [
-            {"id": r[0], "prompt_id": r[1], "prompt_text": r[2], "naive_response": r[3],
-             "critique": r[4], "revised_response": r[5], "principle_attribution": r[6],
-             "tier_violated": r[7], "created_at": r[8]}
+            {
+                "id": r[0],
+                "prompt_id": r[1],
+                "prompt_text": r[2],
+                "naive_response": r[3],
+                "critique": r[4],
+                "revised_response": r[5],
+                "principle_attribution": r[6],
+                "tier_violated": r[7],
+                "created_at": r[8],
+            }
             for r in rows
         ]
 
@@ -391,7 +473,7 @@ def get_run_stats() -> dict:
         "personas": persona_db.count(),
         "prompts": prompt_db.count(),
         "unprocessed": prompt_db.count_unprocessed(),
-        "samples": sample_db.count()
+        "samples": sample_db.count(),
     }
 
 
@@ -404,31 +486,33 @@ class PersonaGenerator:
         self.prompt_db = PromptDB()
 
     def _generate_id(self, content: str) -> str:
-        return hashlib.sha256(f"{content}{datetime.now().isoformat()}".encode()).hexdigest()[:12]
+        return hashlib.sha256(
+            f"{content}{datetime.now().isoformat()}".encode()
+        ).hexdigest()[:12]
 
     def _parse_json_array(self, text: str) -> list:
         """Extract JSON array or single object from LLM response."""
         import re
 
         # Find JSON array in code block
-        match = re.search(r'```(?:json)?\s*(\[.*?\])\s*```', text, re.DOTALL)
+        match = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", text, re.DOTALL)
         if match:
             text = match.group(1)
         else:
             # Try to find JSON object in code block (single item)
-            match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+            match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
             if match:
                 text = match.group(1)
             else:
                 # Try to find array directly
-                start = text.find('[')
-                end = text.rfind(']') + 1
+                start = text.find("[")
+                end = text.rfind("]") + 1
                 if start != -1 and end > start:
                     text = text[start:end]
                 else:
                     # Try to find single object directly
-                    start = text.find('{')
-                    end = text.rfind('}') + 1
+                    start = text.find("{")
+                    end = text.rfind("}") + 1
                     if start != -1 and end > start:
                         text = text[start:end]
 
@@ -447,12 +531,16 @@ class PersonaGenerator:
             print(f"[DEBUG] Partial Text: {text[:200]}...")
             return []
 
-    def generate_personas(self, count: int = 10, seed: Optional[int] = None, mode: str = "simple") -> list[Persona]:
+    def generate_personas(
+        self, count: int = 10, seed: Optional[int] = None, mode: str = "simple"
+    ) -> list[Persona]:
         """Generate diverse user personas with optional seed for variation."""
         if seed is None:
             seed = GLOBAL_SEED
 
-        template = get_simple_template() if mode == "simple" else get_detailed_template()
+        template = (
+            get_simple_template() if mode == "simple" else get_detailed_template()
+        )
         print(f"Generating {count} personas (seed={seed}, mode={mode})...")
 
         prompt = template.format(count=count, seed=seed)
@@ -469,24 +557,35 @@ class PersonaGenerator:
         personas = []
         for p in self._parse_json_array(response):
             persona = Persona(
-                id=self._generate_id(p.get('name', '')),
-                name=p.get('name', 'Unknown'),
-                age=str(p.get('age', p.get('age_range', 'unknown'))),
-                occupation=p.get('occupation', 'any'),
-                interests=p.get('interests', []),
-                expertise_level=p.get('expertise_level', 'any'),
-                communication_style=p.get('communication_style', 'any'),
-                background=p.get('background', '')
+                id=self._generate_id(p.get("name", "")),
+                name=p.get("name", "Unknown"),
+                age=str(p.get("age", p.get("age_range", "unknown"))),
+                occupation=p.get("occupation", "any"),
+                interests=p.get("interests", []),
+                expertise_level=p.get("expertise_level", "any"),
+                communication_style=p.get("communication_style", "any"),
+                background=p.get("background", ""),
             )
             self.persona_db.save_persona(persona)
             personas.append(persona)
-            print(f"  ✓ Saved Persona:\n     Name: {persona.name}\n     Role: {persona.occupation}\n     Bio: {persona.background}")
+            print(
+                f"  ✓ Saved Persona:\n     Name: {persona.name}\n     Role: {persona.occupation}\n     Bio: {persona.background}"
+            )
 
         return personas
 
-    def generate_prompts_for_persona(self, persona: Persona, count: int = 10, batch_size: int = 5, min_difficulty: int = 1, min_safety: int = 1) -> list[GeneratedPrompt]:
+    def generate_prompts_for_persona(
+        self,
+        persona: Persona,
+        count: int = 10,
+        batch_size: int = 5,
+        min_difficulty: int = 1,
+        min_safety: int = 1,
+    ) -> list[GeneratedPrompt]:
         """Generate prompts for a specific persona across difficulty/safety gradient."""
-        print(f"Generating {count} prompts for {persona.name} (batch_size={batch_size}, min_d={min_difficulty}, min_s={min_safety})...")
+        print(
+            f"Generating {count} prompts for {persona.name} (batch_size={batch_size}, min_d={min_difficulty}, min_s={min_safety})..."
+        )
 
         all_prompts = []
         remaining = count
@@ -499,7 +598,7 @@ class PersonaGenerator:
             context = {
                 "name": persona.name,
                 "age": persona.age,
-                "age_range": persona.age, # Backwards compat
+                "age_range": persona.age,  # Backwards compat
                 "occupation": persona.occupation,
                 "interests": ", ".join(persona.interests),
                 "expertise_level": persona.expertise_level,
@@ -507,7 +606,7 @@ class PersonaGenerator:
                 "background": persona.background,
                 "count": current_batch,
                 "min_difficulty": min_difficulty,
-                "min_safety": min_safety
+                "min_safety": min_safety,
             }
 
             prompt = get_prompt_generation_template().format(**context)
@@ -520,7 +619,7 @@ class PersonaGenerator:
                 )
             except Exception as e:
                 print(f"[ERROR] LLM call failed: {e}")
-                remaining -= current_batch # Skip this batch to avoid infinite loop
+                remaining -= current_batch  # Skip this batch to avoid infinite loop
                 continue
 
             print("-" * 40)
@@ -530,17 +629,19 @@ class PersonaGenerator:
             batch_prompts = []
             for p in self._parse_json_array(response):
                 gen_prompt = GeneratedPrompt(
-                    id=self._generate_id(p.get('prompt', '')),
+                    id=self._generate_id(p.get("prompt", "")),
                     persona_id=persona.id,
-                    prompt=p.get('prompt', ''),
-                    difficulty=p.get('difficulty', 3),
-                    safety_level=p.get('safety_level', 1),
-                    category=p.get('category', 'general')
+                    prompt=p.get("prompt", ""),
+                    difficulty=p.get("difficulty", 3),
+                    safety_level=p.get("safety_level", 1),
+                    category=p.get("category", "general"),
                 )
                 self.prompt_db.save_prompt(gen_prompt)
                 batch_prompts.append(gen_prompt)
                 all_prompts.append(gen_prompt)
-                print(f"  ✓ [{gen_prompt.category}] D{gen_prompt.difficulty}/S{gen_prompt.safety_level}: {gen_prompt.prompt}")
+                print(
+                    f"  ✓ [{gen_prompt.category}] D{gen_prompt.difficulty}/S{gen_prompt.safety_level}: {gen_prompt.prompt}"
+                )
 
             remaining -= current_batch
             if not batch_prompts:
@@ -555,28 +656,28 @@ class PersonaGenerator:
 
         prompts_map = get_prompts_by_category()
         count = 0
-        
+
         # Use a consistent ID for the 'benchmark' pseudo-persona
         benchmark_persona_id = "BENCHMARK_SET"
 
         for category, prompts in prompts_map.items():
             if not isinstance(prompts, list):
                 continue
-                
+
             for p_text in prompts:
                 gen_prompt = GeneratedPrompt(
                     id=self._generate_id(p_text),
                     persona_id=benchmark_persona_id,
                     prompt=p_text,
-                    difficulty=3, # Default
-                    safety_level=5 if category == 'deontology' else 3,
+                    difficulty=3,  # Default
+                    safety_level=5 if category == "deontology" else 3,
                     category=category,
-                    processed=False
+                    processed=False,
                 )
                 self.prompt_db.save_prompt(gen_prompt)
                 count += 1
                 print(f"  ✓ Injected Benchmark: [{category}] {p_text[:50]}...")
-        
+
         return count
 
     def run_pipeline(self, num_personas: int = 5, prompts_per_persona: int = 10):
@@ -615,8 +716,8 @@ def process_unprocessed_prompts(limit: int = 10):
     prompts = prompt_db.get_unprocessed(limit)
     print(f"Processing {len(prompts)} unprocessed prompts...")
 
-    for prompt_id, prompt_text, difficulty, safety_level, category in prompts:
-        print(f"\n[D{difficulty}/S{safety_level}] {prompt_text}")
+    for prompt_id, prompt_text, difficulty, safety_level, category, _ in prompts:
+        print(f"\n[{category}] [D{difficulty}/S{safety_level}] {prompt_text}")
         try:
             sample = generator.generate_sample(prompt_text)
             sample_db.save_sample(prompt_id, prompt_text, asdict(sample))
@@ -628,7 +729,7 @@ def process_unprocessed_prompts(limit: int = 10):
     return {
         "prompts": prompt_db.count(),
         "unprocessed": prompt_db.count_unprocessed(),
-        "samples": sample_db.count()
+        "samples": sample_db.count(),
     }
 
 
@@ -636,9 +737,13 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Persona-based prompt generation")
-    parser.add_argument("--personas", type=int, default=5, help="Number of personas to generate")
+    parser.add_argument(
+        "--personas", type=int, default=5, help="Number of personas to generate"
+    )
     parser.add_argument("--prompts", type=int, default=10, help="Prompts per persona")
-    parser.add_argument("--process", type=int, metavar="N", help="Process N unprocessed prompts")
+    parser.add_argument(
+        "--process", type=int, metavar="N", help="Process N unprocessed prompts"
+    )
     parser.add_argument("--stats", action="store_true", help="Show database stats")
 
     # Optional run selection

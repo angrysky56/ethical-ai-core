@@ -3,7 +3,7 @@ name = "ethical-ai-core"
 version = "0.1.0"
 description = "Core Self bootstrapping via Feedback Alignment and Test-Time Training"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "torch>=2.0.0",
     "numpy>=1.24.0",
@@ -16,7 +16,7 @@ dependencies = [
     "httpx>=0.25.0",
     "python-dotenv>=1.0.0",
     "rich>=13.0.0",
-    "gradio>=4.0.0",
+    "gradio>=6.3.0",
 ]
 
 [project.scripts]

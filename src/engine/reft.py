@@ -8,12 +8,15 @@ References:
 - pyreft: https://github.com/stanfordnlp/pyreft
 - LoReFT paper: Low-rank Linear Subspace ReFT
 """
+
+from typing import Callable, Optional
+
 import torch
 import torch.nn as nn
-from typing import Optional, Callable
-from src.layers.delta import LoReFTBlock, MultiHeadLoReFT
-from src.layers.dfa import GlobalDFAProjector
+
 from src.ethical.matrix import EthicalMatrix
+from src.layers.delta import LoReFTBlock
+from src.layers.dfa import GlobalDFAProjector
 
 
 class ReFTPolicy(nn.Module):
@@ -35,31 +38,35 @@ class ReFTPolicy(nn.Module):
         input_dim: int,
         hidden_dim: int,
         output_dim: int,
-        intervention_layers: list[int] = [1],
+        intervention_layers: Optional[list[int]] = None,
         rank: int = 4,
-        num_hidden: int = 3
+        num_hidden: int = 3,
     ):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
-        self.intervention_layer_indices = intervention_layers
+        self.intervention_layer_indices = (
+            intervention_layers if intervention_layers is not None else [1]
+        )
 
         # Build a simple MLP base (frozen in training)
         layers = []
         layers.append(nn.Linear(input_dim, hidden_dim))
         layers.append(nn.GELU())
-        for i in range(num_hidden - 1):
+        for _ in range(num_hidden - 1):
             layers.append(nn.Linear(hidden_dim, hidden_dim))
             layers.append(nn.GELU())
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.base_layers = nn.ModuleList(layers)
 
         # LoReFT interventions at specified layers
-        self.interventions = nn.ModuleDict({
-            f"layer_{i}": LoReFTBlock(hidden_dim, rank=rank)
-            for i in intervention_layers
-        })
+        self.interventions = nn.ModuleDict(
+            {
+                f"layer_{i}": LoReFTBlock(hidden_dim, rank=rank)
+                for i in intervention_layers
+            }
+        )
 
         # Global DFA Projector for skip-layer feedback
         target_dims = {f"layer_{i}": hidden_dim for i in intervention_layers}
@@ -96,12 +103,15 @@ class ReFTPolicy(nn.Module):
             Output tensor (batch, output_dim)
         """
         layer_idx = 0
-        for i, layer in enumerate(self.base_layers):
+        for _, layer in enumerate(self.base_layers):
             x = layer(x)
 
             # Check if this layer should have an intervention
             # Interventions apply AFTER the linear layer, BEFORE activation
-            if isinstance(layer, nn.Linear) and layer_idx in self.intervention_layer_indices:
+            if (
+                isinstance(layer, nn.Linear)
+                and layer_idx in self.intervention_layer_indices
+            ):
                 intervention_name = f"layer_{layer_idx}"
                 if intervention_name in self.interventions:
                     x = self.interventions[intervention_name](x)
@@ -145,7 +155,7 @@ class ReFTTrainer:
         self,
         policy: ReFTPolicy,
         superego_fn: Callable[[torch.Tensor], torch.Tensor],
-        lr: float = 0.01
+        lr: float = 0.01,
     ):
         """
         Args:
@@ -180,15 +190,12 @@ class ReFTTrainer:
 
         # Compute error
         error = output - target
-        loss = (error ** 2).mean()
+        loss = (error**2).mean()
 
         # Skip-layer DFA update (no backward() needed!)
         self.policy.dfa_update(error, lr=self.lr)
 
-        return {
-            "loss": loss.item(),
-            "error_norm": error.norm().item()
-        }
+        return {"loss": loss.item(), "error_norm": error.norm().item()}
 
     def train_epoch(self, dataloader, verbose: bool = True) -> dict:
         """
@@ -214,5 +221,5 @@ class ReFTTrainer:
 
         return {
             "avg_loss": total_loss / max(num_batches, 1),
-            "num_batches": num_batches
+            "num_batches": num_batches,
         }

@@ -120,6 +120,7 @@ unsloth_compiled_cache/
 # Generated Run Data (Keep folder structure)
 data/runs/
 !data/runs/.gitkeep
+data/chat_history.db
 
 # Generated Datasets
 data/constitutional/
