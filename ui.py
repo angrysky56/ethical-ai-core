@@ -284,7 +284,26 @@ def get_personas_list(run_id, db_filename="personas.db"):
 
         db = PersonaDB(run_id=str(run_id), db_filename=db_filename)
         personas = db.get_all_personas()
-        return sorted([p["name"] for p in personas])
+
+        choices = []
+        for p in personas:
+            name = p.get("name", "Unknown")
+            # Only add details if they exist and we are in detailed mode (usually detailed mode uses this)
+            if db_filename == "full_personas.db":
+                job = p.get("occupation", "Unknown")
+                # Get first interest if list
+                interests = p.get("interests", [])
+                first_interest = (
+                    interests[0]
+                    if isinstance(interests, list) and interests
+                    else str(interests)
+                )
+                level = p.get("expertise_level", "Unknown")
+                choices.append(f"{name} | {job} | {first_interest} | {level}")
+            else:
+                choices.append(name)
+
+        return sorted(choices)
     except Exception as e:
         print(f"Error listing personas: {e}")
         return []
@@ -311,7 +330,7 @@ def get_adapter_choices():
     return sorted(adapters)
 
 
-def register_ollama_model(adapter_name: str, model_name: str = "gemma-ethical"):
+def register_ollama_model(adapter_name: str, model_name: str):
     """Register the trained GGUF model with Ollama."""
     import os
     import subprocess
@@ -357,11 +376,17 @@ def get_persona_system_prompt(run_id, db_filename, persona_name):
         return "You are a helpful AI assistant."
 
 
-def get_persona_details_text(run_id, db_filename, persona_name):
+def get_persona_details_text(run_id, db_filename, persona_selection):
     """Get formatted details for UI display."""
     from src.dataset.personas import PersonaDB
 
+    if not run_id or not persona_selection:
+        return "Select a persona to see details."
+
     try:
+        # Handle "Name | info..." format
+        persona_name = persona_selection.split(" | ")[0].strip()
+
         db = PersonaDB(run_id=run_id, db_filename=db_filename)
         all_p = db.get_all_personas()
         p = next((x for x in all_p if x["name"] == persona_name), None)
@@ -517,15 +542,19 @@ def generate_personas(
     num_personas: int,
     mode: str = "simple",
     db_filename: str = "personas.db",
+    target_run_id: Optional[str] = None,
     progress=DEFAULT_PROGRESS,
 ):
     """Generate user personas."""
     from src.config import GLOBAL_SEED
     from src.dataset.personas import PersonaDB, PersonaGenerator, RunManager
 
-    # Create new run first
-    category = "detailed" if mode == "detailed" else "default"
-    RunManager.new_run(category=category)
+    # Create new run or use existing
+    if target_run_id:
+        RunManager.set_run(target_run_id)
+    else:
+        category = "detailed" if mode == "detailed" else "default"
+        RunManager.new_run(category=category)
 
     progress(0, desc="Initializing...")
     gen = PersonaGenerator(db_filename=db_filename)
@@ -566,9 +595,15 @@ def generate_simple_personas(num_personas: int, progress=DEFAULT_PROGRESS):
     )
 
 
-def generate_detailed_personas(num_personas: int, progress=DEFAULT_PROGRESS):
+def generate_detailed_personas(
+    num_personas: int, target_run_id: Optional[str] = None, progress=DEFAULT_PROGRESS
+):
     return generate_personas(
-        num_personas, mode="detailed", db_filename="full_personas.db", progress=progress
+        num_personas,
+        mode="detailed",
+        db_filename="full_personas.db",
+        target_run_id=target_run_id,
+        progress=progress,
     )
 
 
@@ -748,6 +783,15 @@ def start_training(
     if not adapter_name or not re.match(r"^[a-zA-Z0-9_\-]+$", adapter_name):
         return (
             "❌ Invalid Adapter Name. Use alphanumeric, underscores, or hyphens only."
+        )
+
+    # Check for existing folder overlap (Prevent Overwrite)
+    import os
+
+    if os.path.exists(f"data/trained_models/{adapter_name}"):
+        return (
+            f"❌ Adapter folder 'data/trained_models/{adapter_name}' already exists.\n"
+            "   Please choose a different name or manually delete the existing folder to overwrite."
         )
 
     progress(
@@ -1267,6 +1311,18 @@ with gr.Blocks(title="Ethical AI Core") as app:
                 outputs=[register_adapter_dd],
             )
 
+            def update_model_tag_default(adapter):
+                if not adapter:
+                    return gr.update(value="")
+                # Default to adapter name with :latest or :v1
+                return gr.update(value=f"{adapter}:v1")
+
+            register_adapter_dd.change(
+                fn=update_model_tag_default,
+                inputs=[register_adapter_dd],
+                outputs=[register_model_name_input],
+            )
+
             register_btn.click(
                 fn=register_ollama_model,
                 inputs=[register_adapter_dd, register_model_name_input],
@@ -1281,6 +1337,24 @@ with gr.Blocks(title="Ethical AI Core") as app:
             gr.Markdown("Generate rich, creative personas with detailed backstories.")
 
             with gr.Row():
+                detailed_run_selector = gr.Dropdown(
+                    label="Target Run (Append or New)",
+                    choices=get_detailed_run_choices(),
+                    value=lambda: (
+                        (
+                            get_detailed_run_choices()[0][1]
+                            if isinstance(get_detailed_run_choices()[0], tuple)
+                            else get_detailed_run_choices()[0]
+                        )
+                        if get_detailed_run_choices()
+                        else None
+                    ),
+                    interactive=True,
+                    allow_custom_value=False,
+                )
+                refresh_detailed_tab_btn = gr.Button("🔄", size="sm", scale=0)
+
+            with gr.Row():
                 num_detailed = gr.Slider(
                     1, 10, value=3, step=1, label="Number of Personas"
                 )
@@ -1290,9 +1364,15 @@ with gr.Blocks(title="Ethical AI Core") as app:
 
             detailed_output = gr.Markdown()
 
+            # Refresh logic for Detailed Tab Run Selector
+            refresh_detailed_tab_btn.click(
+                fn=lambda: gr.update(choices=get_detailed_run_choices()),
+                outputs=[detailed_run_selector],
+            )
+
             gen_detailed_btn.click(
                 fn=generate_detailed_personas,
-                inputs=[num_detailed],
+                inputs=[num_detailed, detailed_run_selector],
                 outputs=[detailed_output, stats_text],
             )
 
@@ -1424,7 +1504,11 @@ with gr.Blocks(title="Ethical AI Core") as app:
                     outputs=[persona_details_md],
                 )
 
-                def load_prompt_action(run_id, persona_name):
+                def load_prompt_action(run_id, persona_selection):
+                    if not persona_selection:
+                        return ""
+                    # Handle "Name | info..." format
+                    persona_name = persona_selection.split(" | ")[0].strip()
                     return get_persona_system_prompt(
                         run_id, "full_personas.db", persona_name
                     )
@@ -1781,46 +1865,151 @@ with gr.Blocks(title="Ethical AI Core") as app:
                 )
 
             gr.Markdown("---")
-            gr.Markdown("### Run Management")
-            with gr.Row():
-                manage_run_selector = gr.Dropdown(
-                    label="Select Run to Manage",
-                    choices=get_available_runs(include_new=False),
-                    interactive=True,
+            gr.Markdown("---")
+            gr.Markdown("### Data & Run Management")
+
+            # 1. Standard Dataset Runs
+            with gr.Accordion(
+                "📂 Standard Pipeline Runs (Personas/Prompts/Datasets)", open=True
+            ):
+                with gr.Row():
+                    manage_standard_selector = gr.Dropdown(
+                        label="Select Standard Run",
+                        choices=get_run_choices_with_stats(include_new=False),
+                        interactive=True,
+                    )
+                    refresh_standard_mgt_btn = gr.Button("🔄", scale=0)
+
+                with gr.Row():
+                    standard_new_name = gr.Textbox(
+                        label="Rename To", placeholder="New run name"
+                    )
+                    rename_standard_btn = gr.Button("Rename Run")
+                    delete_standard_btn = gr.Button("Delete Run", variant="stop")
+
+                standard_status = gr.Markdown()
+
+                refresh_standard_mgt_btn.click(
+                    fn=lambda: gr.update(
+                        choices=get_run_choices_with_stats(include_new=False)
+                    ),
+                    outputs=[manage_standard_selector],
                 )
-                refresh_manage_btn = gr.Button("🔄", scale=0)
 
-            with gr.Row():
-                new_run_name = gr.Textbox(
-                    label="New Name", placeholder="Enter new name"
+                rename_standard_btn.click(
+                    fn=rename_run_action,
+                    inputs=[manage_standard_selector, standard_new_name],
+                    outputs=[standard_status, manage_standard_selector],
                 )
-                rename_btn = gr.Button("Rename Run")
-                delete_btn = gr.Button("Delete Run", variant="stop")
 
-            manage_status = gr.Markdown()
+                delete_standard_btn.click(
+                    fn=delete_run_action,
+                    inputs=[manage_standard_selector],
+                    outputs=[
+                        standard_status,
+                        train_run_selector,
+                        manage_standard_selector,
+                    ],
+                )
 
-            refresh_manage_btn.click(
-                fn=lambda: gr.update(choices=get_available_runs(include_new=False)),
-                outputs=[manage_run_selector],
-            )
+            # 2. Detailed Persona Runs
+            with gr.Accordion("🎭 Detailed Persona Runs", open=False):
+                with gr.Row():
+                    manage_detailed_selector = gr.Dropdown(
+                        label="Select Detailed Run",
+                        choices=get_detailed_run_choices(),
+                        interactive=True,
+                        allow_custom_value=False,
+                    )
+                    refresh_detailed_mgt_btn = gr.Button("🔄", scale=0)
 
-            rename_btn.click(
-                fn=rename_run_action,
-                inputs=[manage_run_selector, new_run_name],
-                outputs=[manage_status, manage_run_selector],
-            )
+                with gr.Row():
+                    detailed_new_name = gr.Textbox(
+                        label="Rename To", placeholder="New run name"
+                    )
+                    rename_detailed_btn = gr.Button("Rename Run")
+                    delete_detailed_btn = gr.Button("Delete Run", variant="stop")
 
-            delete_btn.click(
-                fn=delete_run_action,
-                inputs=[manage_run_selector],
-                outputs=[manage_status, train_run_selector, manage_run_selector],
-            )
+                detailed_status = gr.Markdown()
+
+                refresh_detailed_mgt_btn.click(
+                    fn=lambda: gr.update(choices=get_detailed_run_choices()),
+                    outputs=[manage_detailed_selector],
+                )
+
+                rename_detailed_btn.click(
+                    fn=rename_run_action,
+                    inputs=[manage_detailed_selector, detailed_new_name],
+                    outputs=[detailed_status, manage_detailed_selector],
+                )
+
+                delete_detailed_btn.click(
+                    fn=delete_run_action,
+                    inputs=[manage_detailed_selector],
+                    outputs=[
+                        detailed_status,
+                        detailed_run_selector,
+                        manage_detailed_selector,
+                    ],
+                )
+
+            # 3. Chat History
+            with gr.Accordion("💬 Chat History Sessions", open=False):
+                with gr.Row():
+                    manage_chat_selector = gr.Dropdown(
+                        label="Select Chat Session",
+                        choices=refresh_session_list(),
+                        interactive=True,
+                    )
+                    refresh_chat_mgt_btn = gr.Button("🔄", scale=0)
+
+                with gr.Row():
+                    chat_new_name = gr.Textbox(
+                        label="Rename To", placeholder="New session title"
+                    )
+                    rename_chat_btn = gr.Button("Rename Session")
+                    delete_chat_btn = gr.Button("Delete Session", variant="stop")
+
+                chat_status = gr.Markdown()
+
+                refresh_chat_mgt_btn.click(
+                    fn=lambda: gr.update(choices=refresh_session_list()),
+                    outputs=[manage_chat_selector],
+                )
+
+                def rename_chat_wrapper(session_id, new_title):
+                    if not session_id or not new_title:
+                        return "Invalid Selection", gr.update()
+                    chat_db.rename_session(session_id, new_title)
+                    return f"Renamed to {new_title}", gr.update(
+                        choices=refresh_session_list()
+                    )
+
+                rename_chat_btn.click(
+                    fn=rename_chat_wrapper,
+                    inputs=[manage_chat_selector, chat_new_name],
+                    outputs=[chat_status, manage_chat_selector],
+                )
+
+                def delete_chat_wrapper(session_id):
+                    if not session_id:
+                        return "Invalid Selection", gr.update()
+                    chat_db.delete_session(session_id)
+                    return "Deleted session", gr.update(
+                        choices=refresh_session_list(), value=None
+                    )
+
+                delete_chat_btn.click(
+                    fn=delete_chat_wrapper,
+                    inputs=[manage_chat_selector],
+                    outputs=[chat_status, manage_chat_selector],
+                )
 
             gr.Markdown("---")
             gr.Markdown("### Export Dataset")
             with gr.Row():
                 export_run_selector = gr.Dropdown(
-                    label="Select Run to Export",
+                    label="Select Standard Run to Export",
                     choices=get_available_runs(include_new=False),
                     interactive=True,
                 )
