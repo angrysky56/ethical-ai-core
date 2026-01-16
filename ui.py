@@ -15,6 +15,7 @@ import json
 import os
 from typing import Optional
 from src.dataset.personas import RunManager
+from src.dataset.loader import get_loader
 
 from dotenv import load_dotenv
 
@@ -159,6 +160,40 @@ def get_run_choices_with_stats(include_new=False):
         return get_available_runs(include_new=include_new)
 
 
+def get_detailed_run_choices():
+    """Get runs that have detailed personas (full_personas.db)."""
+    from src.dataset.personas import RunManager, PersonaDB
+    try:
+        choices = []
+        
+        # 1. New Detailed Runs
+        detailed_runs = RunManager.list_runs(category="detailed")
+        for run_id in detailed_runs:
+             # Assume all in detailed folder are valid detailed runs
+             try:
+                 p_c = PersonaDB(run_id=run_id, db_filename="full_personas.db").count()
+                 choices.append((f"{run_id} (Detailed, {p_c}P)", run_id))
+             except:
+                 choices.append((f"{run_id} (Detailed)", run_id))
+
+        # 2. Legacy Detailed Runs (in default folder)
+        default_runs = RunManager.list_runs(category="default")
+        base_dir = RunManager.get_runs_root("default")
+        
+        for run_id in default_runs:
+            db_path = base_dir / run_id / "full_personas.db"
+            if db_path.exists():
+                try:
+                    p_c = PersonaDB(run_id=run_id, db_filename="full_personas.db").count()
+                    if p_c > 0:
+                         choices.append((f"{run_id} (Legacy, {p_c}P)", run_id))
+                except Exception:
+                     pass
+        return choices
+    except Exception as e:
+        print(f"Error getting detailed runs: {e}")
+        return []
+
 def delete_run_action(run_id):
     """Delete the specified run."""
     from src.dataset.personas import RunManager
@@ -214,6 +249,32 @@ def get_personas_list(run_id, db_filename="personas.db"):
         print(f"Error listing personas: {e}")
         return []
 
+
+def register_ollama_model(model_name: str = "gemma-ethical"):
+    """Register the trained GGUF model with Ollama."""
+    import subprocess
+    from pathlib import Path
+    import os
+    
+    # Assuming running from project root
+    PROJECT_ROOT = Path(os.getcwd())
+    modelfile_path = PROJECT_ROOT / "data" / "trained_models" / "gemma_lora" / "Modelfile"
+
+    if not modelfile_path.exists():
+        return f"⚠️ Modelfile not found at {modelfile_path}. Train the model first."
+    
+    cmd = ["ollama", "create", model_name, "-f", str(modelfile_path)]
+    print(f"Running: {' '.join(cmd)}")
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return f"✅ Model '{model_name}' successfully registered with Ollama!\nGo to Settings -> Provider: Ollama -> Refresh Models to select it."
+    except subprocess.CalledProcessError as e:
+        return f"❌ Failed to register model: {e.stderr}"
+    except FileNotFoundError:
+        return "❌ 'ollama' command not found. Is Ollama installed?"
+
+
 def get_persona_system_prompt(run_id, db_filename, persona_name):
     """Get system prompt for a specific persona."""
     from src.dataset.personas import PersonaDB
@@ -224,9 +285,35 @@ def get_persona_system_prompt(run_id, db_filename, persona_name):
 
          if not target:
              return "You are a helpful AI assistant."
-         return f"You are {target['name']}, a {target['age_range']} year old {target['occupation']}.\\nInterests: {', '.join(target['interests'])}\\nBackground: {target['background']}\\nStyle: {target['communication_style']}"
+         return f"You are {target['name']}, {target['age']} years old, a {target['occupation']}.\\nInterests: {', '.join(target['interests'])}\\nBackground: {target['background']}\\nStyle: {target['communication_style']}"
     except Exception:
          return "You are a helpful AI assistant."
+
+def get_persona_details_text(run_id, db_filename, persona_name):
+    """Get formatted details for UI display."""
+    from src.dataset.personas import PersonaDB
+    try:
+        db = PersonaDB(run_id=run_id, db_filename=db_filename)
+        all_p = db.get_all_personas()
+        p = next((x for x in all_p if x['name'] == persona_name), None)
+        if not p:
+            return "Persona not found."
+        
+        # Handle interests list or string
+        interests = p.get('interests', [])
+        if isinstance(interests, list):
+            interests = ", ".join(interests)
+            
+        return f"""### {p['name']}
+**Occupation:** {p.get('occupation', 'N/A')}
+**Age:** {p.get('age', p.get('age_range', 'N/A'))}
+**Interests:** {interests}
+**Expertise:** {p.get('expertise_level', 'N/A')}
+**Style:** {p.get('communication_style', 'N/A')}
+**Background:** {p.get('background', 'N/A')}"""
+    except Exception as e:
+        return f"Error loading details: {e}"
+
 
 
 
@@ -332,8 +419,12 @@ def fetch_openrouter_models():
 
 def generate_personas(num_personas: int, mode: str = "simple", db_filename: str = "personas.db", progress=gr.Progress()):
     """Generate user personas."""
-    from src.dataset.personas import PersonaGenerator, PersonaDB
+    from src.dataset.personas import PersonaGenerator, PersonaDB, RunManager
     from src.config import GLOBAL_SEED
+
+    # Create new run first
+    category = "detailed" if mode == "detailed" else "default"
+    run_id = RunManager.new_run(category=category)
 
     progress(0, desc="Initializing...")
     gen = PersonaGenerator(db_filename=db_filename)
@@ -343,15 +434,15 @@ def generate_personas(num_personas: int, mode: str = "simple", db_filename: str 
 
     output = [f"**Generated {len(personas)} new personas (seed={GLOBAL_SEED}):**\n"]
     for p in personas:
-        output.append(f"### {p.name}\n- **Occupation:** {p.occupation}\n- **Age:** {p.age_range}\n- **Interests:** {', '.join(p.interests)}\n- **Expertise:** {p.expertise_level}\n- **Style:** {p.communication_style}\n- **Background:** {p.background}\n")
+        output.append(f"### {p.name}\n- **Occupation:** {p.occupation}\n- **Age:** {p.age}\n- **Interests:** {', '.join(p.interests)}\n- **Expertise:** {p.expertise_level}\n- **Style:** {p.communication_style}\n- **Background:** {p.background}\n")
 
     # Also show total in DB
     db = PersonaDB(db_filename=db_filename)
     all_personas = db.get_all_personas()
     output.append(f"\n---\n**Total personas in database:** {len(all_personas)}")
 
-    # Get current run for auto-cascade
-    from src.dataset.personas import RunManager
+
+# ...
     current_run = RunManager.get_current_run()
     choices = get_run_choices_with_stats()
 
@@ -407,6 +498,21 @@ def generate_prompts(prompts_per_persona: int, min_difficulty: int = 1, min_safe
     choices = get_run_choices_with_stats()
 
     return "\n".join(output), format_stats(), gr.update(choices=choices, value=current_run)
+
+
+def load_benchmarks(progress=gr.Progress()):
+    """Inject benchmark prompts into the current run."""
+    from src.dataset.personas import PersonaGenerator, RunManager
+    
+    progress(0, desc="Injecting benchmarks...")
+    gen = PersonaGenerator()
+    count = gen.inject_benchmark_prompts()
+    
+    # Get current run for auto-cascade
+    current_run = RunManager.get_current_run()
+    choices = get_run_choices_with_stats()
+    
+    return f"✓ Injected {count} benchmark prompts from active Training Pack.", format_stats(), gr.update(choices=choices, value=current_run)
 
 
 def process_prompts(prompts_source_run: Optional[str] = None, progress=gr.Progress()):
@@ -490,12 +596,16 @@ def start_training(
         return "No samples found in dataset. Generate samples first."
 
     progress(0.02, desc=f"Found {len(samples)} samples. Starting {method.upper()} training...")
+    print(f"\n{'='*60}")
+    print(f"TRAINING: {method.upper()} on {len(samples)} samples")
+    print(f"{'='*60}")
 
     # Get client and create progress callback
     client = get_llm_client()
 
     def progress_callback(pct, msg):
         progress(pct, desc=msg)
+        print(f"  [{int(pct*100):3d}%] {msg}")
 
     try:
         if method == "ddl":
@@ -507,6 +617,89 @@ def start_training(
                 num_heads=num_heads,
                 progress_fn=progress_callback
             )
+        elif method == "local_gemma":
+            # 1. Export data for Unsloth
+            import json
+            import subprocess
+            import os
+            
+            progress(0.1, desc="Exporting data for Local Training...")
+            data_file = "data/training_temp.json"
+            output_dir = "data/trained_models/gemma_lora"
+            os.makedirs("data/trained_models", exist_ok=True)
+            
+            with open(data_file, "w") as f:
+                json.dump(samples, f)
+                
+            # 2. Spawn Training Subprocess
+            progress(0.2, desc="Spawning Unsloth Training (Check Terminal)...")
+            
+            # Load Unsloth python path from environment
+            # from src.config import get_env_variable  <-- Removing this invalid import
+            
+            # Try getting from config or fall back to local dev path (but warn)
+            unsloth_python = os.environ.get("UNSLOTH_PYTHON_PATH")
+            if not unsloth_python:
+                # Fallback for dev environment if not in .env
+                unsloth_python = "/home/ty/Repositories/unsloth/unsloth_env/bin/python"
+                print(f"WARN: UNSLOTH_PYTHON_PATH not set in .env, using default: {unsloth_python}")
+
+            cmd = [
+                unsloth_python,
+                "src/training/train_local.py",
+                data_file,
+                output_dir
+            ]
+            
+            print(f"Running command: {' '.join(cmd)}")
+            
+            # Simple blocking call (for MVP) that captures output
+            env = os.environ.copy()
+            # Ensure HF Token is passed if set in current env
+            if "HUGGING_FACE_HUB_TOKEN" in os.environ:
+                env["HUGGING_FACE_HUB_TOKEN"] = os.environ["HUGGING_FACE_HUB_TOKEN"]
+            
+            # Force unbuffered output for Python
+            env["PYTHONUNBUFFERED"] = "1"
+            # Fix fragmentation on smaller VRAM
+            env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+            proc = subprocess.Popen(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.STDOUT, 
+                universal_newlines=True,
+                bufsize=1,
+                env=env
+            )
+            
+            logs = []
+            for line in proc.stdout:
+                line = line.strip()
+                if line:
+                    print(f"  [Unsloth] {line}")
+                    logs.append(line)
+                    # Update progress slightly to show activity
+                    if "[1/5]" in line: progress(0.2, desc="Loading Model...")
+                    if "[2/5]" in line: progress(0.3, desc="Configuring LoRA...")
+                    if "[3/5]" in line: progress(0.4, desc="Preparing Data...")
+                    if "[4/5]" in line: progress(0.5, desc="Training...")
+                    if "[5/5]" in line: progress(0.9, desc="Saving...")
+            
+            proc.wait()
+            
+            if proc.returncode != 0:
+                raise Exception("Unsloth Training Failed. Check terminal logs.")
+            
+            log_str = "\n".join(logs[-10:])
+            return f"""**Local Gemma Training Complete**
+            
+**Logs:**
+{log_str}
+
+**Output:** `{output_dir}`
+"""
+
         else:  # reft
             result = train_reft(
                 samples=samples,
@@ -545,31 +738,55 @@ def start_training(
 # TAB 3: Chat Interface
 # =============================================================================
 
-def chat_handler(message: str, history: list, system_prompt: str = "You are a helpful AI assistant."):
+def get_chat_response(message: str, history: list, system_prompt: str = "You are a helpful AI assistant.", chat_provider: str = None, chat_model: str = None):
     """Chat interface with Constitutional Judge."""
     if not message.strip():
-        return history, ""
+        return ""
+        
 
-    from src.llm_client import get_llm_client
+
+    from src.llm_client import get_llm_client, LLMClient
     from src.judgment.principles import PrincipleEvaluator
 
-    client = get_llm_client()
+    if chat_provider and chat_model:
+        # Use specific chat configuration
+        client = LLMClient(provider=chat_provider)
+        client.update_config(model=chat_model)
+    else:
+        # Fallback to global
+        client = get_llm_client()
+
     evaluator = PrincipleEvaluator()
 
-    # Step 1: Get base model response
-    base_response = client.complete(
-        message,
-        system=system_prompt,
-        temperature=0.7
-    )
+    # Step 1: Build Context
+    # Robustly handle history format (Gradio 4/5 tuple assumption vs messages)
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    if history:
+        # Check if history is list of lists (tuples) - Old Gradio default
+        if isinstance(history[0], (list, tuple)):
+            for h in history:
+                messages.append({"role": "user", "content": str(h[0])})
+                if len(h) > 1 and h[1]:
+                     messages.append({"role": "assistant", "content": str(h[1])})
+        # Check if history is list of dicts - New Gradio "messages" format
+        elif isinstance(history[0], dict):
+            messages.extend(history)
 
-    # Step 2: Judge evaluates the response
+    messages.append({"role": "user", "content": message})
+
+    # Step 2: Get base model response
+    try:
+        base_response = client.chat(messages, temperature=0.7)
+    except Exception as e:
+        return f"❌ Error from LLM Provider: {e}"
+
+    # Step 3: Judge evaluates the response (Judge usually evaluates single turn)
     judgment = evaluator.evaluate(message, base_response)
 
-    # Step 3: Format output based on verdict
+    # Step 4: Format output based on verdict
     tier = judgment.get('tier_violated')
     verdict = judgment.get('verdict', 'unknown')
-
 
     if verdict == 'approve':
         final_response = base_response
@@ -582,11 +799,7 @@ def chat_handler(message: str, history: list, system_prompt: str = "You are a he
         status = f"✗ Blocked (Tier {tier})"
 
     # Format with judge status
-    formatted = f"{final_response}\n\n---\n**Judge:** {status}"
-
-    history = history or []
-    history.append((message, formatted))
-    return history, ""
+    return f"{final_response}\n\n---\n**Judge:** {status}"
 
 
 # =============================================================================
@@ -625,6 +838,27 @@ with gr.Blocks(title="Ethical AI Core") as app:
             gr.Markdown("### Generate Constitutional AI Training Data")
 
             with gr.Row():
+                pack_dd = gr.Dropdown(
+                    label="Active Training Pack",
+                    choices=get_loader().list_available_packs(),
+                    value=get_loader().get_current_pack_name(),
+                    interactive=True,
+                    scale=1
+                )
+                
+                def update_pack_action(pack_name):
+                    try:
+                        get_loader().set_pack(pack_name)
+                        return f"Pack switched to: {pack_name}"
+                    except Exception as e:
+                        return f"Error: {e}"
+
+                # Update logic
+                pack_dd.change(update_pack_action, [pack_dd], [])
+            
+            gr.Markdown("---")
+
+            with gr.Row():
                 # COLUMN 1: Step 1 - Generate Personas
                 with gr.Column():
                     gr.Markdown("#### Step 1: Generate Personas")
@@ -652,6 +886,8 @@ with gr.Blocks(title="Ethical AI Core") as app:
                             min_difficulty_input = gr.Slider(1, 5, value=1, step=1, label="Max Difficulty", scale=1)
                             min_safety_input = gr.Slider(1, 5, value=1, step=1, label="Max Danger", scale=1)
                     generate_prompts_btn = gr.Button("Generate Prompts", variant="primary")
+                    gr.Markdown("---")
+                    inject_benchmarks_btn = gr.Button("💉 Inject Benchmark Prompts", size="sm")
 
 
                 # COLUMN 3: Step 3 - Generate Samples
@@ -698,25 +934,11 @@ with gr.Blocks(title="Ethical AI Core") as app:
                 outputs=[output_log, stats_text]
             )
 
+            gr.Markdown("> **Note:** 1,000 to 5,000 samples are generally sufficient to proceed to training the Gemma model.")
 
-        # =====================================================================
-        # TAB 2: Detailed Personas
-        # =====================================================================
-        with gr.TabItem("🎭 Detailed Personas"):
-            gr.Markdown("### Detailed Persona Generator")
-            gr.Markdown("Generate rich, creative personas with detailed backstories.")
 
-            with gr.Row():
-                num_detailed = gr.Slider(1, 10, value=3, step=1, label="Number of Personas")
-                gen_detailed_btn = gr.Button("Generate Detailed Personas", variant="primary")
 
-            detailed_output = gr.Markdown()
 
-            gen_detailed_btn.click(
-                fn=generate_detailed_personas,
-                inputs=[num_detailed],
-                outputs=[detailed_output, stats_text]
-            )
 
         # =====================================================================
         # TAB 2: Training (DDL)
@@ -746,10 +968,14 @@ with gr.Blocks(title="Ethical AI Core") as app:
 
             with gr.Row():
                 train_method = gr.Radio(
-                    choices=["ddl", "reft"],
-                    value="ddl",
+                    choices=[
+                        ("LoRA Fine-Tune (Unsloth/Gemma) [RECOMMENDED]", "local_gemma"),
+                        ("Deep Delta Learning (DDL) [Experimental/Prototype]", "ddl"),
+                        ("ReFT (Representation Finetuning) [Experimental/Prototype]", "reft")
+                    ],
+                    value="local_gemma",
                     label="Training Method",
-                    info="DDL: rank-1 delta | ReFT: low-rank interventions"
+                    info="LoRA: Full usable model for Chat | DDL/ReFT: Research prototypes (offline steering)"
                 )
 
             with gr.Row():
@@ -768,52 +994,135 @@ with gr.Blocks(title="Ethical AI Core") as app:
                 inputs=[train_method, epochs, learning_rate, num_heads, rank, train_run_selector],
                 outputs=[training_output]
             )
+            
+            gr.Markdown("---")
+            gr.Markdown("### Post-Training (Local Only)")
+            register_btn = gr.Button("🐳 Register GGUF to Ollama (gemma-ethical)", size="sm")
+            register_output = gr.Textbox(label="Registration Status", lines=2)
+            
+            register_btn.click(
+                fn=register_ollama_model,
+                inputs=[],
+                outputs=[register_output]
+            )
+
 
         # =====================================================================
-        # TAB 3: Chat Interface
+        # TAB 3: Detailed Personas
+        # =====================================================================
+        with gr.TabItem("🎭 Detailed Personas"):
+            gr.Markdown("### Detailed Persona Generator")
+            gr.Markdown("Generate rich, creative personas with detailed backstories.")
+
+            with gr.Row():
+                num_detailed = gr.Slider(1, 10, value=3, step=1, label="Number of Personas")
+                gen_detailed_btn = gr.Button("Generate Detailed Personas", variant="primary")
+
+            detailed_output = gr.Markdown()
+
+            gen_detailed_btn.click(
+                fn=generate_detailed_personas,
+                inputs=[num_detailed],
+                outputs=[detailed_output, stats_text]
+            )
+
+            inject_benchmarks_btn.click(
+                fn=load_benchmarks,
+                inputs=[],
+                outputs=[output_log, stats_text, prompts_source_dd]
+            )
+
+
+        # =====================================================================
+        # TAB 4: Chat Interface
         # =====================================================================
         with gr.TabItem("💬 Chat"):
             gr.Markdown("### Chat with Constitutional AI")
-            gr.Markdown("*Responses are evaluated by the Judge against Core Principles.*")
-
-            with gr.Accordion("🎭 System Persona Configuration", open=False):
+            
+            with gr.Group():
                 with gr.Row():
-                    chat_persona_run_dd = gr.Dropdown(
-                        label="Source Run",
-                        choices=get_run_choices_with_stats(),
-                        value=lambda: (get_run_choices_with_stats()[0][1] if isinstance(get_run_choices_with_stats()[0], tuple) else get_run_choices_with_stats()[0]) if get_run_choices_with_stats() else None,
+                    chat_provider_dd = gr.Dropdown(
+                        label="Chat Provider",
+                        choices=["ollama", "openrouter", "lmstudio", "openai"],
+                        value="ollama",
                         interactive=True
                     )
-                    chat_persona_db_dd = gr.Dropdown(label="DB Type", choices=["personas.db", "full_personas.db"], value="full_personas.db", interactive=True)
+                    chat_model_dd = gr.Dropdown(
+                        label="Chat Model",
+                        choices=["gemma-ethical", "llama3.1:8b"], # Defaults
+                        value="gemma-ethical",
+                        allow_custom_value=True,
+                        interactive=True
+                    )
+                    # Refresh button for chat models (Ollama focus)
+                    def refresh_chat_models(provider):
+                        from src.llm_client import LLMClient
+                        try:
+                            client = LLMClient(provider=provider)
+                            return gr.update(choices=client.list_models())
+                        except:
+                            return gr.update()
+                            
+                    refresh_chat_btn = gr.Button("🔄", scale=0)
+                    refresh_chat_btn.click(refresh_chat_models, [chat_provider_dd], [chat_model_dd])
+
+            gr.Markdown("*Responses are evaluated by the Judge against Core Principles.*")
+
+
+            with gr.Accordion("🎭 System Persona Configuration (Detailed Only)", open=False):
+                gr.Markdown("Load a Detailed Persona to assume its identity.")
+                with gr.Row():
+                    chat_persona_run_dd = gr.Dropdown(
+                        label="Persona Source Run",
+                        choices=get_detailed_run_choices(),
+                        value=lambda: (get_detailed_run_choices()[0][1] if isinstance(get_detailed_run_choices()[0], tuple) else get_detailed_run_choices()[0]) if get_detailed_run_choices() else None,
+                        interactive=True,
+                        scale=3
+                    )
+                    chat_refresh_runs_btn = gr.Button("🔄 Refresh Runs", scale=1)
+                    # Hardcoded to detailed DB
+                    chat_persona_db = gr.State("full_personas.db")
+
+                    def refresh_detailed_runs():
+                         c = get_detailed_run_choices()
+                         return gr.update(choices=c, value=c[0][1] if c else None)
+                    
+                    chat_refresh_runs_btn.click(refresh_detailed_runs, [], [chat_persona_run_dd])
 
                 with gr.Row():
                     chat_persona_select_dd = gr.Dropdown(label="Select Persona", choices=[], allow_custom_value=False, interactive=True, scale=3)
                     refresh_personas_btn = gr.Button("🔄 Load List", scale=1)
 
+                persona_details_md = gr.Markdown("Select a persona to see details.")
+                
                 system_prompt_input = gr.Textbox(label="System Prompt", value="You are a helpful AI assistant.", lines=3)
                 load_sys_prompt_btn = gr.Button("⬇ Load Selected Persona into Prompt", size="sm")
 
-                def update_persona_list(run_id, db_filename):
-                     choices = get_personas_list(run_id, db_filename)
+                def update_persona_list(run_id):
+                     # Always use full_personas.db for Chat
+                     choices = get_personas_list(run_id, "full_personas.db")
                      return gr.update(choices=choices, value=choices[0] if choices else None)
 
-                refresh_personas_btn.click(update_persona_list, [chat_persona_run_dd, chat_persona_db_dd], [chat_persona_select_dd])
+                refresh_personas_btn.click(update_persona_list, [chat_persona_run_dd], [chat_persona_select_dd])
+                
+                # Show details on selection
+                chat_persona_select_dd.change(
+                    fn=get_persona_details_text,
+                    inputs=[chat_persona_run_dd, chat_persona_db, chat_persona_select_dd],
+                    outputs=[persona_details_md]
+                )
 
-                def load_prompt_action(run_id, db_filename, persona_name):
-                    return get_persona_system_prompt(run_id, db_filename, persona_name)
+                def load_prompt_action(run_id, persona_name):
+                    return get_persona_system_prompt(run_id, "full_personas.db", persona_name)
 
-                load_sys_prompt_btn.click(load_prompt_action, [chat_persona_run_dd, chat_persona_db_dd, chat_persona_select_dd], [system_prompt_input])
+                load_sys_prompt_btn.click(load_prompt_action, [chat_persona_run_dd, chat_persona_select_dd], [system_prompt_input])
 
-            chatbot = gr.Chatbot(label="Constitutional AI", height=450)
-            msg = gr.Textbox(label="Your message", placeholder="Type your message here...", lines=2)
-
-            with gr.Row():
-                send_btn = gr.Button("Send", variant="primary")
-                clear_btn = gr.Button("Clear")
-
-            msg.submit(chat_handler, [msg, chatbot, system_prompt_input], [chatbot, msg])
-            send_btn.click(chat_handler, [msg, chatbot, system_prompt_input], [chatbot, msg])
-            clear_btn.click(lambda: ([], ""), outputs=[chatbot, msg])
+            chat_interface = gr.ChatInterface(
+                fn=get_chat_response,
+                additional_inputs=[system_prompt_input, chat_provider_dd, chat_model_dd],
+                title="Constitutional AI Chat",
+                description="Chat with the model. All responses are evaluated by the Ethical Judge."
+            )
 
         # =====================================================================
         # TAB 4: Settings

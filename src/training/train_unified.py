@@ -63,12 +63,24 @@ class EmbeddingCache:
         Returns:
             (bad_embeddings, good_embeddings) - lists of tensors
         """
+        import time
         bad_embs = []
         good_embs = []
+        start_time = time.time()
         
         for i, sample in enumerate(samples):
+            elapsed = time.time() - start_time
+            if i > 0:
+                rate = i / elapsed
+                remaining = (len(samples) - i) / rate
+                eta_min = int(remaining // 60)
+                eta_sec = int(remaining % 60)
+                eta_str = f" | ETA: {eta_min}m {eta_sec}s" if eta_min > 0 else f" | ETA: {eta_sec}s"
+            else:
+                eta_str = ""
+            
             if progress_fn:
-                progress_fn(i / len(samples), f"Embedding {i+1}/{len(samples)}...")
+                progress_fn(i / len(samples), f"Embedding {i+1}/{len(samples)}{eta_str}")
             
             naive = sample.get("naive_response", "")
             revised = sample.get("revised_response", "")

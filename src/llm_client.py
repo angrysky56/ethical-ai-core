@@ -16,7 +16,7 @@ class LLMClient:
 
     def __init__(self, provider: Optional[str] = None):
         self.provider = provider or LLM_PROVIDER
-        self.config = get_llm_config()
+        self.config = get_llm_config(self.provider)
         # No timeout - some requests can take hours
 
     def _get_headers(self) -> dict:

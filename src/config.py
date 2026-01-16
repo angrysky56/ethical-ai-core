@@ -44,9 +44,10 @@ LLM_CONFIG = {
     },
 }
 
-def get_llm_config() -> dict:
-    """Returns the active LLM configuration."""
-    return LLM_CONFIG.get(LLM_PROVIDER, LLM_CONFIG["ollama"])
+def get_llm_config(provider: str = None) -> dict:
+    """Returns the active LLM configuration or specific provider config."""
+    target = provider or LLM_PROVIDER
+    return LLM_CONFIG.get(target, LLM_CONFIG["ollama"])
 
 
 # =============================================================================

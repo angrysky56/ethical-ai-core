@@ -60,10 +60,9 @@ class PrincipleEvaluator:
         self.llm = llm_client or get_llm_client()
 
     def _load_principles(self) -> str:
-        """Loads the Core Principles text file."""
-        if not self.principles_path.exists():
-            return "No principles file found. Apply general ethical standards."
-        return self.principles_path.read_text(encoding="utf-8")
+        """Loads the Core Principles from the active training pack."""
+        from src.dataset.loader import get_loader
+        return get_loader().get_principles_text()
 
     def _parse_json_response(self, text: str) -> dict:
         """Extract JSON from LLM response (handles markdown code blocks)."""

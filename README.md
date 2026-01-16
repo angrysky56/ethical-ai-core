@@ -1,63 +1,154 @@
-# Ethical AI Core
+# Ethical AI Core: Constitutional Judge & Alignment System
 
-**Constitutional AI Dataset Generator & Judge System**
+Generate synthetic alignment data, train a local "Judge" model, and chat with an ethically aligned AI—all from a local UI.
 
-Implements the Ephemeral Judgment Layer architecture from [Bootstrapping-Core-Self-via-AI-Feedback.md](./Bootstrapping-Core-Self-via-AI-Feedback.md).
+![UI Screenshot](image-1.png)
 
-## Purpose
+## 📌 Project Overview
 
-Generate training data for a **Judge** that evaluates AI agent behavior against hierarchical principles — detecting shortcuts, deception, hidden complexity, and Moloch patterns.
+This system provides a complete **Constitutional AI feedback loop** running locally.
+1.  **Generate**: Create diverse personas and prompts to stress-test AI ethics.
+2.  **Evaluate**: Uses a strong model (LLM Judge) to critique response against a Constitution (`principles.md`).
+3.  **Train**: Fine-tunes a local Gemma-3-4b-it model to internalize these ethics.
+4.  **Chat**: Interact with the resulting model.
 
-**This is NOT about controlling user requests.** It's about training a model to catch when AI agents:
+---
 
-- Hide issues or take shortcuts
-- Claim false certainty
-- Are sycophantic or deceptive
-- Exhibit Moloch patterns (optimizing appearance over substance)
+## ️ Installation & Setup
 
-## Quick Start
+### 1. Prerequisites
+- **Python 3.10+**
+- **NVIDIA GPU** (8GB+ VRAM recommended)
+- **Linux/WSL2** (Required for Unsloth optimization)
 
+### 2. Install Dependencies (Core)
 ```bash
-# Setup
-uv venv && source .venv/bin/activate
+# Create virtual env
+uv venv
+source .venv/bin/activate
+
+# Install Project
 uv pip install -e .
-
-# Configure LLM provider
-cp .env.example .env
-# Edit .env with your provider (Ollama, OpenRouter, etc.)
-
-# ⚠️  WARNING: Use LOCAL models for adversarial dataset generation!
-# Red team prompts may trigger cloud provider ToS violations.
-
-# Launch Web UI
-python ui.py
-# Open http://localhost:7860
 ```
 
-## Web UI
+### 3. Install Unsloth (Critical for Training)
+Unsloth should be set up in the directory of your choice and linked in the .env
 
+```bash
+# For venv and virtual environments installs to isolate your installation to not break system packages, and to reduce irreparable damage to your system, use venv:
+
+apt install python3.10-venv python3.11-venv python3.12-venv python3.13-venv -y
+python -m venv unsloth_env
+source unsloth_env/bin/activate
+pip install --upgrade pip && pip install uv
+uv pip install unsloth
+```
+*Trouble installing Unsloth? See the [official guide](https://unsloth.ai/docs/get-started/install/pip-install).*
+
+### 4. Configuration (.env)
+Copy the example configuration:
+```bash
+cp .env.example .env
+```
+Edit `.env` to set your providers:
+```ini
+# --- Data Generation Providers ---
+# Options: ollama, openrouter, openai, lmstudio
+LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=sk-...
+
+# --- Hugging Face (Required for Gemma-3-4b) ---
+# 1. Accept license: https://huggingface.co/google/gemma-3-4b-it
+# 2. Get Token: https://huggingface.co/settings/tokens
+HUGGING_FACE_HUB_TOKEN=hf_...
+```
+
+---
+
+## 🚀 Usage Guide
+
+Launch the Web UI:
 ```bash
 python ui.py
 ```
+Open **http://localhost:7860**.
 
-**Dataset Generation Tab:**
+Train and chat
 
-1. **Step 1: Generate Personas** — Create user personas for diverse prompt generation
-2. **Step 2: Generate Prompts** — Generate prompts with configurable min difficulty/safety
-3. **Step 3: Generate Samples** — Process through Constitutional AI pipeline
+![alt text](image.png)
 
-**LLM Configuration (Step 2):**
+### 🔄 The Workflow
 
-- Timeout, Batch Size
-- Min Difficulty (1-5) — Higher = more complex prompts
-- Min Safety (1-5) — Higher = more ethically challenging
+#### Step 1: Dataset Generation Tab
+This allows you to build a training dataset from scratch.
+1.  **Select Training Pack**: Controls the Prompt Templates (`prompts.yaml`), Personas (`personas.yaml`), and Constitution (`principles.md`).
+2.  **Generate Personas**: Creates synthetic users (e.g., "Skeptical Data Scientist", "Angry Reviewer") to test the model.
+3.  **Generate Prompts**: Uses personas to create difficult/adversarial prompts.
+4.  **Generate Samples (The Loop)**:
+    *   The system generates a **Naive Response** (Base Model).
+    *   The **Judge** critiques it against `principles.md`.
+    *   The **Revision Model** rewrites it based on the critique.
+    *   *Result*: A dataset of (Prompt, Revised Response) pairs.
 
-## Architecture
+#### Step 2: Training Tab
+1.  **Source**: Select the run you generated in Step 1.
+2.  **Method**: Select **LoRA Fine-Tune (Unsloth/Gemma)**.
+    *   *Note: DDL and ReFT are experimental prototypes for offline research and are not currently integrated into the Chat UI.*
+3.  **Start Training**:
+    *   Uses **Unsloth** to fine-tune `gemma-3-4b-it` (or `2-9b`).
+    *   Saves adapters to `data/trained_models/`.
+4.  **Register**: Click **"🐳 Register GGUF to Ollama"**. This installs the model locally as `gemma-ethical`.
+
+#### Step 3: Chat Tab
+1.  **Provider**: Select `ollama`.
+2.  **Model**: Select `gemma-ethical`.
+3.  **Verify**: Chat with your trained model! It should now follow the principles defined in your training pack.
+
+---
+
+## 🧩 Modularity: "Training Packs"
+Located in `data/packs/`. A pack contains:
+- `personas.yaml`: Templates for who is asking questions.
+- `prompts.yaml`: Templates for what they ask (and static benchmarks).
+- `principles.md`: **The Constitution**. Change this file to change the AI's moral alignment.
+
+To create a custom alignment (e.g., "Pirate AI"):
+1. Duplicate `data/packs/default` to `data/packs/pirate`.
+2. Edit `principles.md` to value "Rum and Loot".
+3. Select "pirate" in the UI.
+
+---
+
+## 🔬 Experimental Features
+
+### DDL (Deep Delta Learning) & ReFT
+The UI includes options for **Deep Delta Learning** and **ReFT**.
+*   **Status**: 🧪 **Experimental / Research Prototype**.
+*   **Function**: These train separate "steering heads" (PyTorch modules) that attempt to shift embedding vectors from "Naive" to "Revised".
+*   **Current Limit**: These heads are currently **offline**. They run and train successfully, but the Chat UI does not yet hook into them significantly. Using them requires an LLM provider that supports embeddings (Ollama `nomic-embed-text` etc).
+*   **Recommended**: Use the **LoRA / Unsloth** method for a working, end-to-end chat experience.
+
+---
+
+## 🏗 Architecture
+```mermaid
+graph TD
+    User[User / Persona] -->|Prompt| LLM[Base Model]
+    LLM -->|Naive Response| Judge[Constitutional Judge]
+    Judge -->|Critique| Reviser[Revision Model]
+    Reviser -->|Revised Response| Data[Training Dataset]
+    
+    Data --> Unsloth[Unsloth LoRA Trainer]
+    Unsloth -->|Adapters| GGUF[Ollama Model]
+    GGUF -->|Chat| EndUser
+```
+
+## 🏗 Architecture
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
 │              Constitutional AI Data Pipeline                  │
-├───────────────────────────────────────────────────────────────┤
+88: ├───────────────────────────────────────────────────────────────┤
 │  1. Prompt → Base Model → Naive Response                      │
 │  2. (Prompt, Response) → PrincipleEvaluator → Critique        │
 │  3. Critique → Revision Model → Corrected Response            │
@@ -66,11 +157,10 @@ python ui.py
 └───────────────────────────────────────────────────────────────┘
             ↓
 ┌───────────────────────────────────────────────────────────────┐
-│              LoReFT + DFA Training                            │
+│              Deep Delta Learning / LoRA Training              │
 ├───────────────────────────────────────────────────────────────┤
-│  LoReFTBlock: Low-rank activation intervention (steering)     │
-│  GlobalDFAProjector: Skip-layer error projection via B        │
-│  ReFTTrainer: Short-circuit training (no backward() needed)   │
+│  The collected data trains a lightweight adapter (LoRA)       │
+│  to steer the model's 'Core Self' towards the Constitution.   │
 └───────────────────────────────────────────────────────────────┘
 ```
 

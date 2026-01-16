@@ -106,4 +106,40 @@ cython_debug/
 .idea/
 
 # Data
-data/
+
+
+
+# Unsloth Cache (Auto-generated kernels)
+unsloth_compiled_cache/
+
+# ==========================
+# Project Specific Ignores
+# ==========================
+
+# Generated Run Data (Keep folder structure)
+data/runs/
+!data/runs/.gitkeep
+
+# Generated Datasets
+data/constitutional/
+!data/constitutional/.gitkeep
+
+# Trained Models & Adapters
+data/trained_models/
+!data/trained_models/.gitkeep
+
+# Training Checkpoints & Output
+outputs/
+!outputs/.gitkeep
+wandb/
+
+# Dependencies & Tools (Auto-installed)
+llama.cpp/
+
+# Large Model Files
+*.pt
+*.pth
+*.gguf
+*.bin
+*.safetensors
+*.onnx
