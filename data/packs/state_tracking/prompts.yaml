@@ -1,0 +1,12 @@
+# State-Tracking Benchmark Prompts
+# Static hand-written tasks for quick eval/injection. The bulk of training data
+# should come from the deterministic generator (src/capabilities/build.py),
+# which produces verified-correct full-state traces at scale.
+
+state_tracking:
+  - "Put the apple in the red box. Put the key in the blue box. Move the apple to the green box. Take the apple out. Question: Where is the apple at the end?"
+  - "Put the coin in the drawer. Put the ring in the drawer. Take the coin out. Move the ring to the bag. Question: Where is the coin at the end?"
+  - "Put the book on the desk. Put the lamp on the desk. Move the book to the shelf. Take the lamp out. Put the pen on the desk. Question: Where is the lamp at the end?"
+  - "Set x = 5. Set y = 9. Clear x. Set z = 5. Question: After these steps, which variables hold the value 5?"
+  - "Put the marble in box A. Put the stone in box B. Move the marble to box B. Take the stone out. Move the marble to box C. Question: Where is the stone at the end?"
+  - "Put file1 in folder X. Put file2 in folder Y. Delete file1. Move file2 to folder X. Put file3 in folder Y. Question: Where is file1 at the end?"

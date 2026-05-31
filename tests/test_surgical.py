@@ -16,6 +16,11 @@ def test_surgical_erasure():
     Verifies that SurgicalEgo can erase a specific direction from the output
     without changing the base policy weights.
     """
+    # Seed for determinism: the erasure is an optimization over a random init,
+    # so without a fixed seed the test is flaky depending on RNG state left by
+    # preceding tests. The math converges reliably; the seed removes the lottery.
+    torch.manual_seed(0)
+
     dim = 5
     base_model = SimpleOutput(dim)
 

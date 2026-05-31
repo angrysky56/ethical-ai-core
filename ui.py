@@ -745,6 +745,89 @@ def export_dataset():
     return f"Exported {count} samples to `{output_path}`"
 
 
+def generate_capability_samples(
+    count: int,
+    min_ops: int,
+    max_ops: int,
+    remove_prob: float,
+    seed_str: str = "",
+    target_run_id: Optional[str] = None,
+    progress=DEFAULT_PROGRESS,
+):
+    """Generate verified state-tracking capability samples into a run.
+
+    Unlike the persona->prompt->judge pipeline, these are produced from a
+    deterministic reducer (no LLM call), so they are correct by construction and
+    instant. They teach the full-state tracking discipline (complete state every
+    step, removals tracked explicitly) and flow into the same SampleDB / export /
+    training path as constitutional samples.
+
+    Seed precedence: an explicit value in seed_str wins; otherwise the global
+    Settings seed (state.seed) is used; if that is also unset, a fresh random
+    seed is drawn so repeated clicks add genuinely new samples.
+    """
+    import hashlib
+    import random
+    from datetime import datetime
+
+    from src.capabilities.state_tracking import generate_tracking_samples
+    from src.dataset.personas import RunManager, SampleDB
+
+    if min_ops > max_ops:
+        return ("❌ Min operations cannot exceed max operations.",
+                format_stats(), gr.update())
+
+    # Resolve seed: explicit field > global setting > random.
+    seed_str = (seed_str or "").strip()
+    if seed_str:
+        try:
+            seed = int(seed_str)
+        except ValueError:
+            return (f"❌ Seed must be an integer (got '{seed_str}'), or leave it "
+                    "empty for random.", format_stats(), gr.update())
+        seed_note = f"seed={seed}"
+    elif state.seed is not None:
+        seed = state.seed
+        seed_note = f"seed={seed} (from Settings)"
+    else:
+        seed = random.randint(1, 2_000_000_000)
+        seed_note = f"seed={seed} (random)"
+
+    if target_run_id and target_run_id != "[Create New Run]":
+        RunManager.set_run(target_run_id)
+    else:
+        RunManager.new_run()
+
+    progress(0.1, desc=f"Generating {int(count)} verified tracking samples...")
+    samples = generate_tracking_samples(
+        count=int(count),
+        seed=seed,
+        n_ops_range=(int(min_ops), int(max_ops)),
+        remove_prob=float(remove_prob),
+    )
+
+    progress(0.6, desc="Saving to run database...")
+    db = SampleDB()
+    ts = datetime.now().isoformat()
+    for i, s in enumerate(samples):
+        sid = hashlib.sha256(f"track{i}{s.prompt}".encode()).hexdigest()[:12]
+        db.save_sample(sid, s.prompt, s.to_sample_dict(sid, ts))
+
+    removed = sum(s.meta.get("removed_query") for s in samples)
+    current_run = RunManager.get_current_run()
+    choices = get_run_choices_with_stats()
+    msg = (
+        f"✓ Generated **{len(samples)}** verified state-tracking samples "
+        f"({removed} removed-query / {len(samples) - removed} present-query) "
+        f"into run `{current_run}` [{seed_note}].\n\n"
+        f"These are correct by construction (no LLM/judge needed) and are now in "
+        f"the dataset alongside any constitutional samples — ready to export and "
+        f"train. Tip: select the **state_tracking** pack above to train a "
+        f"dedicated tracking adapter, or blend with an ethics run."
+    )
+    return msg, format_stats(), gr.update(choices=choices, value=current_run)
+
+
 # =============================================================================
 # TAB 2: Training (Deep Delta Learning)
 # =============================================================================
@@ -1196,8 +1279,76 @@ with gr.Blocks(title="Ethical AI Core") as app:
                 outputs=[output_log, stats_text],
             )
 
+            gr.Markdown("---")
+            with gr.Accordion(
+                "⚡ Capability Samples — State Tracking (no LLM needed)", open=False
+            ):
+                gr.Markdown(
+                    "Generate **verified** state-tracking training samples directly, "
+                    "without the persona→prompt→judge loop. Each sample teaches the "
+                    "full-state tracking discipline (write the complete state every "
+                    "step; track removed items explicitly so they're never silently "
+                    "dropped). Targets are computed deterministically, so they are "
+                    "**correct by construction and instant** — no model calls, no GPU."
+                )
+                with gr.Row():
+                    cap_run_dd = gr.Dropdown(
+                        label="Save to Run",
+                        choices=get_run_choices_with_stats(include_new=True),
+                        value="[Create New Run]",
+                        interactive=True,
+                        scale=2,
+                    )
+                    cap_count = gr.Slider(
+                        10, 1000, value=100, step=10,
+                        label="Number of Samples", scale=2,
+                    )
+                with gr.Row():
+                    cap_min_ops = gr.Slider(
+                        4, 30, value=6, step=1, label="Min Steps (easy)", scale=1
+                    )
+                    cap_max_ops = gr.Slider(
+                        4, 40, value=20, step=1, label="Max Steps (hard)", scale=1
+                    )
+                    cap_remove_prob = gr.Slider(
+                        0.1, 0.7, value=0.4, step=0.05,
+                        label="Removal Density", scale=1,
+                    )
+                cap_seed = gr.Textbox(
+                    label="Seed (empty = random each click)",
+                    placeholder="e.g. 42 — leave blank for fresh samples each time",
+                    value="",
+                )
+                cap_generate_btn = gr.Button(
+                    "⚡ Generate Tracking Samples", variant="primary"
+                )
+                gr.Markdown(
+                    "> Difficulty spans Min→Max steps so the model sees short and "
+                    "long traces. Higher removal density stresses the exact failure "
+                    "this discipline fixes. ~half the samples query a removed item."
+                )
+
             gr.Markdown(
                 "> **Note:** 1,000 to 5,000 samples are generally sufficient to proceed to training the Gemma model."
+            )
+
+            cap_generate_btn.click(
+                fn=generate_capability_samples,
+                inputs=[
+                    cap_count,
+                    cap_min_ops,
+                    cap_max_ops,
+                    cap_remove_prob,
+                    cap_seed,
+                    cap_run_dd,
+                ],
+                outputs=[output_log, stats_text, cap_run_dd],
+            )
+
+            # Keep the capability run dropdown in sync with the refresh button
+            refresh_all_btn.click(
+                fn=lambda: gr.update(choices=get_run_choices_with_stats(include_new=True)),
+                outputs=[cap_run_dd],
             )
 
         # =====================================================================

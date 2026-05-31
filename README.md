@@ -17,9 +17,10 @@ This system provides a complete **Constitutional AI feedback loop** running loca
 ## ️ Installation & Setup
 
 ### 1. Prerequisites
-- **Python 3.10+**
-- **NVIDIA GPU** (8GB+ VRAM recommended)
+- **Python 3.12+** (developed/tested on 3.13)
+- **NVIDIA GPU** (8GB+ VRAM recommended; an RTX 3060 12GB handles Gemma-3-4b LoRA)
 - **Linux/WSL2** (Required for Unsloth optimization)
+- **uv** for environment management
 
 ### 2. Install Dependencies (Core)
 ```bash
@@ -29,6 +30,11 @@ source .venv/bin/activate
 
 # Install Project
 uv pip install -e .
+```
+
+Verify the core install (no GPU or model needed):
+```bash
+uv run pytest tests/ -q        # expect 14 passed
 ```
 
 ### 3. Install Unsloth (Critical for Training)
@@ -51,18 +57,30 @@ Copy the example configuration:
 ```bash
 cp .env.example .env
 ```
-Edit `.env` to set your providers:
-```ini
-# --- Data Generation Providers ---
-# Options: ollama, openrouter, openai, lmstudio
-LLM_PROVIDER=openrouter
-OPENROUTER_API_KEY=sk-...
 
-# --- Hugging Face (Required for Gemma-3-4b) ---
-# 1. Accept license: https://huggingface.co/google/gemma-3-4b-it
-# 2. Get Token: https://huggingface.co/settings/tokens
+> ⚠️ **Use LOCAL models (Ollama / LM Studio) for dataset generation.** The
+> red-team prompts include adversarial content designed to stress-test ethical
+> boundaries. Sending that to cloud providers (OpenAI, OpenRouter, Anthropic)
+> may violate their Terms of Service. Local models have no such restriction.
+> `LLM_PROVIDER` defaults to `ollama` for this reason.
+
+Edit `.env` to set your provider and the Unsloth/HF settings training needs:
+```ini
+# --- Data Generation Provider (default: local Ollama) ---
+# Options: ollama, lmstudio, openrouter, openai
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen3-vl            # any pulled chat model works
+LLM_TIMEOUT=60                   # per-request seconds; raise for slow models
+
+# --- Training: Unsloth env + Hugging Face (Gemma is gated) ---
+# Path to the python inside the separate unsloth venv (see step 3)
+UNSLOTH_PYTHON_PATH=/path/to/unsloth_env/bin/python
+# Accept license at https://huggingface.co/google/gemma-3-4b-it, then:
 HUGGING_FACE_HUB_TOKEN=hf_...
 ```
+See `.env.example` for the full set of options (OpenRouter/OpenAI/LM Studio
+blocks, generation seed, TTT hyperparameters).
 
 ### 5. Install Ollama (Critical for Chatting)
 
@@ -168,12 +186,12 @@ graph TD
     GGUF -->|Chat| EndUser
 ```
 
-## 🏗 Architecture
+The pipeline in detail:
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
 │              Constitutional AI Data Pipeline                  │
-88: ├───────────────────────────────────────────────────────────────┤
+├───────────────────────────────────────────────────────────────┤
 │  1. Prompt → Base Model → Naive Response                      │
 │  2. (Prompt, Response) → PrincipleEvaluator → Critique        │
 │  3. Critique → Revision Model → Corrected Response            │
@@ -193,12 +211,15 @@ graph TD
 
 | Component            | File                         | Description                                   |
 | -------------------- | ---------------------------- | --------------------------------------------- |
-| `LoReFTBlock`        | `src/layers/delta.py`        | Low-rank activation intervention              |
-| `GlobalDFAProjector` | `src/layers/dfa.py`          | Skip-layer feedback via Ethical Matrix B      |
-| `ReFTPolicy`         | `src/engine/reft.py`         | Policy with interventions at specified layers |
-| `ReFTTrainer`        | `src/engine/reft.py`         | Short-circuit DFA training loop               |
+| `PrincipleEvaluator` | `src/judgment/principles.py` | 3-tier hierarchical GenRM judge               |
+| `GenRM`              | `src/judgment/genrm.py`      | Generative reward-model scoring               |
 | `EthicalMatrix`      | `src/ethical/matrix.py`      | Seeds B from `core_principles.md` hash        |
-| `PrincipleEvaluator` | `src/judgment/principles.py` | 3-tier hierarchical GenRM                     |
+| `LoReFTBlock` 🧪      | `src/layers/delta.py`        | Low-rank activation intervention              |
+| `GlobalDFAProjector` 🧪 | `src/layers/dfa.py`       | Skip-layer feedback via Ethical Matrix B      |
+| `ReFTPolicy` 🧪       | `src/engine/reft.py`         | Policy with interventions at specified layers |
+| `ReFTTrainer` 🧪      | `src/engine/reft.py`         | Short-circuit DFA training loop               |
+
+🧪 = experimental research path (offline; not wired into the Chat UI — use the LoRA path).
 
 ## Core Principles (3-Tier Hierarchy)
 
@@ -226,33 +247,47 @@ harness.train(epochs=5)
 
 | Command                               | Purpose                               |
 | ------------------------------------- | ------------------------------------- |
-| `python ui.py`                        | Launch web UI                         |
+| `uv run pytest tests/ -q`             | Verify the install (14 tests, no GPU) |
+| `python verify_unsloth.py`            | Check the Unsloth env is wired up     |
+| `python ui.py`                        | Launch web UI (http://localhost:7860) |
 | `python -m src.training.test_harness` | Train Judge on Constitutional dataset |
 | `python demo.py --prompt "..."`       | Single prompt pipeline                |
 | `python run_pipeline.py`              | Full CLI pipeline                     |
+| `python -m src.db_migration`          | Apply SQLite schema migrations        |
 
 ## Project Structure
 
 ```
 src/
-├── config.py              # LLM provider config
-├── llm_client.py          # Multi-provider client (Ollama, OpenRouter, etc.)
+├── config.py              # LLM provider config + paths + seed
+├── llm_client.py          # Multi-provider client (Ollama, OpenRouter, OpenAI, LM Studio)
+├── db_migration.py        # SQLite schema migration for run/chat history
 ├── dataset/
-│   ├── generator.py       # Constitutional data pipeline
-│   └── personas.py        # Persona-based generation + SQLite
+│   ├── generator.py       # Constitutional data pipeline (naive → critique → revised)
+│   ├── personas.py        # Persona-based generation + SQLite
+│   ├── prompts.py         # Prompt-template generation
+│   ├── loader.py          # Dataset loading for training
+│   └── chat_history.py    # Chat persistence
 ├── judgment/
-│   └── principles.py      # PrincipleEvaluator (GenRM)
+│   ├── principles.py      # PrincipleEvaluator (3-tier hierarchical GenRM)
+│   └── genrm.py           # GenRM scoring / schema generation
 ├── engine/
-│   ├── ephemeral.py       # EphemeralEgo + SurgicalEgo (TTT)
-│   └── reft.py            # ReFTPolicy + ReFTTrainer
+│   ├── ephemeral.py       # EphemeralEgo + SurgicalEgo (test-time training)
+│   └── reft.py            # ReFTPolicy + ReFTTrainer (experimental)
 ├── layers/
-│   ├── dfa.py             # DFALinear + GlobalDFAProjector
-│   └── delta.py           # DeltaResidualBlock + LoReFTBlock
+│   ├── dfa.py             # DFALinear + GlobalDFAProjector (experimental)
+│   └── delta.py           # DeltaResidualBlock + LoReFTBlock (experimental)
 ├── ethical/
-│   └── matrix.py          # EthicalMatrix (seeds B from principles)
+│   └── matrix.py          # EthicalMatrix (seeds B from principles hash)
 └── training/
-    └── test_harness.py    # Constitutional training harness
+    ├── test_harness.py    # Constitutional training harness
+    ├── train_local.py     # Local LoRA training entry
+    └── train_unified.py   # Unified training driver (Unsloth/Gemma)
 ```
+
+> Note: `engine/reft.py`, `layers/dfa.py`, and `layers/delta.py` are the
+> experimental DDL/ReFT research path (see below). The working end-to-end path
+> is data generation → `training/` LoRA → Ollama.
 
 ## References
 

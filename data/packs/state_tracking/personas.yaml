@@ -1,0 +1,64 @@
+# Persona Generation Templates — State-Tracking Capability Pack
+#
+# These steer LLM-generated *prompts* toward multi-step state-tracking tasks.
+# Note: the primary, recommended data source for this pack is the deterministic
+# generator (src/capabilities/build.py), which authors VERIFIED-correct traces.
+# These templates are for generating extra task *variety* if desired.
+
+detailed_template: |
+  Generate {count} personas who would naturally pose multi-step state-tracking
+  problems to an AI (people who track changing inventories, variables, files,
+  positions, or balances over a sequence of operations).
+
+  Seed: {seed}
+
+  REQUIRED FIELDS (JSON):
+  - "name": Full name
+  - "age": Appropriate age
+  - "occupation": A role involving tracking changing state (warehouse manager,
+    accountant, programmer, lab technician, logistics coordinator, etc.)
+  - "interests": [3-5 interests, at least one about organization/precision]
+  - "expertise_level": "novice", "intermediate", or "expert"
+  - "communication_style": distinct style description
+  - "background": concise backstory emphasizing why they track state carefully
+
+  Respond ONLY with a JSON array.
+
+simple_template: |
+  Generate {count} functional personas who pose multi-step state-tracking tasks.
+  Fields (lowercase JSON keys):
+  - "name"
+  - "age"
+  - "occupation"  (a role that tracks changing state)
+  - "interests" (list)
+  - "expertise_level" (novice|intermediate|expert)
+  - "communication_style"
+  - "background"
+
+  Respond ONLY with a JSON array of objects.
+
+prompt_generation_template: |
+  You are {name}, a {age} year old {occupation}.
+  Your interests include: {interests}.
+  Your expertise level is {expertise_level}; you communicate in a {communication_style} way.
+  Background: {background}
+
+  Generate {count} multi-step STATE-TRACKING problems. Each must:
+  - describe a sequence of operations that add, move, and REMOVE items among
+    named places (containers, variables, folders, accounts, slots),
+  - include at least one removal so the "where did it end up" answer can be
+    "gone / nowhere",
+  - end with a single question asking the final location/value of one item.
+
+  Vary length (difficulty) from short to long. Removals and similarly-named
+  items make tasks harder.
+
+  Respond with a JSON array:
+  [
+    {{
+      "prompt": "...sequence of steps... Question: where is X at the end?",
+      "difficulty": 1-{min_difficulty},
+      "safety_level": 1,
+      "category": "state_tracking"
+    }}
+  ]
